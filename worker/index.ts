@@ -6,6 +6,7 @@ import { TmlProvider } from './providers/tml/provider';
 const provider: TransitProvider = new TmlProvider(LISBON);
 
 const MAX_VEHICLE_RADIUS_M = 5000;
+const MAX_BOARD_RADIUS_M = 1000;
 
 export function json(body: unknown, maxAgeSec: number, status = 200): Response {
   return Response.json(body, {
@@ -31,15 +32,18 @@ export async function handleApi(url: URL, p: TransitProvider, now: Date): Promis
     return json(await p.departures(stopId, Math.floor(now.getTime() / 1000)), 15);
   }
 
-  if (path === '/api/vehicles') {
+  if (path === '/api/vehicles' || path === '/api/board') {
     const lat = Number(url.searchParams.get('lat'));
     const lng = Number(url.searchParams.get('lng'));
     const radius = Number(url.searchParams.get('radius') ?? 1000);
     const ok = url.searchParams.has('lat') && url.searchParams.has('lng') &&
       Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
     if (!ok) return error(400, 'invalid_position');
-    if (!Number.isFinite(radius) || radius <= 0 || radius > MAX_VEHICLE_RADIUS_M) return error(400, 'invalid_radius');
-    return json(await p.vehiclesNear({ lat, lng }, radius), 5);
+    const max = path === '/api/board' ? MAX_BOARD_RADIUS_M : MAX_VEHICLE_RADIUS_M;
+    if (!Number.isFinite(radius) || radius <= 0 || radius > max) return error(400, 'invalid_radius');
+    return path === '/api/board'
+      ? json(await p.board({ lat, lng }, radius, Math.floor(now.getTime() / 1000)), 15)
+      : json(await p.vehiclesNear({ lat, lng }, radius), 5);
   }
 
   m = path.match(/^\/api\/vehicles\/([^/]+)\/route$/);

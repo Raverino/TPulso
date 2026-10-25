@@ -1,0 +1,470 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system — "OV Pulse" (ported to TPulso): a dark, transit-console aesthetic for a
+ * real-time Lisbon (Carris Metropolitana) bus radar. All colors are oklch tokens.
+ * Mode colors (bus / train / tram) are semantic tokens too, so markers,
+ * chips and arrival rows stay in sync.
+ */
+
+@theme inline {
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+
+  --color-bus: var(--bus);
+  --color-train: var(--train);
+  --color-tram: var(--tram);
+  --color-locate: var(--locate);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+
+  --shadow-float: 0 18px 50px -12px oklch(0 0 0 / 0.75);
+  --shadow-glow: 0 0 0 1px oklch(0.82 0.16 92 / 0.25), 0 10px 40px -10px oklch(0.82 0.16 92 / 0.35);
+}
+
+:root {
+  --radius: 1rem;
+  --background: oklch(0.16 0.025 258);
+  --foreground: oklch(0.97 0.008 250);
+  --surface: oklch(0.21 0.028 258);
+  --surface-2: oklch(0.26 0.03 258);
+  --card: oklch(0.21 0.028 258);
+  --card-foreground: oklch(0.97 0.008 250);
+  --popover: oklch(0.21 0.028 258);
+  --popover-foreground: oklch(0.97 0.008 250);
+  --primary: oklch(0.85 0.16 92);
+  --primary-foreground: oklch(0.2 0.03 258);
+  --secondary: oklch(0.28 0.03 258);
+  --secondary-foreground: oklch(0.97 0.008 250);
+  --muted: oklch(0.26 0.028 258);
+  --muted-foreground: oklch(0.7 0.02 255);
+  --accent: oklch(0.72 0.14 200);
+  --accent-foreground: oklch(0.18 0.03 258);
+  --destructive: oklch(0.63 0.21 25);
+  --destructive-foreground: oklch(0.98 0.005 250);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.85 0.16 92 / 60%);
+
+  --bus: oklch(0.82 0.17 82);
+  --train: oklch(0.72 0.15 232);
+  --tram: oklch(0.72 0.17 340);
+  --locate: oklch(0.68 0.19 258);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body {
+    height: 100%;
+    overscroll-behavior: none;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+}
+
+/* --- Map chrome ------------------------------------------------------- */
+
+.leaflet-container {
+  background: oklch(0.14 0.02 258);
+  font-family: var(--font-sans);
+}
+
+.leaflet-control-attribution {
+  background: oklch(0.16 0.025 258 / 0.7) !important;
+  color: var(--color-muted-foreground) !important;
+  font-size: 9px;
+}
+
+.leaflet-control-attribution a {
+  color: var(--color-muted-foreground) !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--color-surface);
+  color: var(--color-foreground);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+}
+
+.leaflet-popup-content {
+  margin: 0.75rem 0.9rem;
+  font-size: 0.8rem;
+}
+
+.leaflet-popup-close-button {
+  color: var(--color-muted-foreground) !important;
+}
+
+/* Dark tiles: OSM raster tiles, desaturated and inverted-lite. */
+.tiles-dark {
+  filter: invert(1) hue-rotate(185deg) brightness(0.92) contrast(0.92) saturate(0.7);
+}
+
+/* --- User location pulse --------------------------------------------- */
+
+.locate-dot {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--color-locate);
+  box-shadow:
+    0 0 0 3px oklch(1 0 0 / 0.9),
+    0 0 18px 4px oklch(0.68 0.19 258 / 0.7);
+}
+
+.locate-dot::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  background: oklch(0.68 0.19 258 / 0.45);
+  animation: locate-pulse 1.9s ease-out infinite;
+}
+
+@keyframes locate-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+/* --- Vehicle markers -------------------------------------------------- */
+
+.vehicle-pin .unknown-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 9999px;
+  background: var(--destructive);
+  color: var(--destructive-foreground, white);
+  font-size: 10px;
+  font-weight: 800;
+  box-shadow: 0 0 0 2px oklch(0.15 0.015 258);
+}
+.vehicle-pin {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px 12px 12px 4px;
+  color: oklch(0.18 0.03 258);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid oklch(1 0 0 / 0.35);
+  box-shadow: 0 6px 16px -6px oklch(0 0 0 / 0.9);
+  transition: transform 0.9s linear;
+}
+
+.vehicle-pin span {
+  margin-top: 1px;
+  letter-spacing: -0.02em;
+}
+
+.vehicle-pin[data-mode="bus"] {
+  background: var(--bus);
+}
+.vehicle-pin[data-mode="train"] {
+  background: var(--train);
+}
+.vehicle-pin[data-mode="tram"] {
+  background: var(--tram);
+}
+
+.stop-pin {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: oklch(0.97 0.008 250);
+  border: 2px solid oklch(0.2 0.03 258);
+  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.4);
+}
+
+@keyframes sweep {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Opacity-only pulse: transforms on SVG paths shift the ring off-centre. */
+.radar-ring {
+  animation: sweep 3.4s ease-in-out infinite;
+}
+
+.route-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.route-line.route-bus {
+  stroke: var(--bus);
+}
+.route-line.route-train {
+  stroke: var(--train);
+}
+.route-line.route-tram {
+  stroke: var(--tram);
+}
+
+/* Upcoming stops of a selected vehicle, with an ETA badge above */
+.upcoming-stop {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--primary);
+  border: 2px solid var(--background);
+}
+.upcoming-eta {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font: 700 10px/1.4 "Space Grotesk", sans-serif;
+  box-shadow: 0 2px 6px oklch(0 0 0 / 0.4);
+}
+
+/* Sonar hardware: only the radar disc shows the map, the rest is a bezel */
+.sonar-bezel {
+  position: absolute;
+  inset: 0;
+  z-index: 450;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at var(--x) var(--y), oklch(0.72 0.16 160 / 0.05) 0, transparent var(--r)),
+    radial-gradient(
+      circle at var(--x) var(--y),
+      transparent calc(var(--r) - 1px),
+      oklch(0.68 0.19 258 / 0.9) var(--r),
+      oklch(0.68 0.19 258 / 0.9) calc(var(--r) + 2px),
+      oklch(0.1 0.015 258) calc(var(--r) + 3px),
+      oklch(0.2 0.02 258) calc(var(--r) + 16px),
+      oklch(0.09 0.012 258) calc(var(--r) + 18px),
+      oklch(0.15 0.015 258) calc(var(--r) + 60px),
+      oklch(0.11 0.012 258) 100%
+    );
+}
+.sonar-bezel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-conic-gradient(
+    from 0deg at var(--x) var(--y),
+    oklch(0.68 0.19 258 / 0.7) 0deg 0.6deg,
+    transparent 0.6deg 10deg
+  );
+  -webkit-mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) + 5px), #000 calc(var(--r) + 6px), #000 calc(var(--r) + 13px), transparent calc(var(--r) + 14px));
+  mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) + 5px), #000 calc(var(--r) + 6px), #000 calc(var(--r) + 13px), transparent calc(var(--r) + 14px));
+}
+/* Live refresh: a radar sweep plus a charging arc running round the rim. */
+.sonar-charge {
+  position: absolute;
+  z-index: 451;
+  pointer-events: none;
+  border-radius: 9999px;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.sonar-charge.on {
+  opacity: 1;
+}
+.sonar-charge::before,
+.sonar-charge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  animation: sonar-spin 1.6s linear infinite;
+  animation-play-state: paused;
+}
+.sonar-charge.on::before,
+.sonar-charge.on::after {
+  animation-play-state: running;
+}
+.sonar-charge::before {
+  background: conic-gradient(from 0deg, transparent 0deg 300deg, oklch(0.72 0.16 160 / 0.22) 360deg);
+}
+.sonar-charge::after {
+  inset: -2px;
+  border: 3px solid transparent;
+  border-top-color: oklch(0.78 0.19 145 / 0.95);
+  border-right-color: oklch(0.78 0.19 145 / 0.5);
+  filter: drop-shadow(0 0 4px oklch(0.78 0.19 145 / 0.8));
+}
+@keyframes sonar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.leaflet-container .leaflet-control-attribution {
+  position: relative;
+  z-index: 460;
+}
+
+/* Vehicles glide between 1 s simulation steps. */
+.leaflet-marker-icon.vehicle-marker {
+  transition: transform 1s linear;
+  will-change: transform;
+}
+.no-glide .leaflet-marker-icon.vehicle-marker,
+.leaflet-zoom-anim .leaflet-marker-icon.vehicle-marker {
+  transition: none;
+}
+
+/* Station countdown sits clear of the vehicle pin it may share a spot with */
+.upcoming-eta.lift {
+  bottom: calc(100% + 3px);
+}
+
+/* New vehicles fade and grow in gently instead of popping onto the radar */
+.vehicle-pin {
+  animation: vehicle-in 1.2s ease-out both;
+}
+@keyframes vehicle-in {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* --- TPulso: data-source display rule (CLAUDE.md) ---------------------
+ * Live = green, solid, pulsing · Scheduled = blue-grey outline · Stale = grey, faded
+ * Expected position (later) = dashed outline. Shape, fill and motion differ, not only colour.
+ */
+:root {
+  --src-live: oklch(0.78 0.19 145);
+  --src-scheduled: oklch(0.72 0.03 250);
+  --src-stale: oklch(0.62 0.01 250);
+}
+.src-dot {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+}
+.src-live {
+  background: var(--src-live);
+}
+.src-live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--src-live);
+  animation: src-pulse 1.6s ease-out infinite;
+}
+@keyframes src-pulse {
+  from { transform: scale(1); opacity: 0.75; }
+  to { transform: scale(2.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .src-live::after { animation: none; opacity: 0; }
+}
+.src-scheduled {
+  background: transparent;
+  border: 2px solid var(--src-scheduled);
+}
+.src-stale {
+  background: var(--src-stale);
+  opacity: 0.5;
+}
+.src-expected {
+  background: transparent;
+  border: 2px dashed var(--src-scheduled);
+}
+
+/* Source badge on a vehicle pin (same corner the original uses for the "?" badge, mirrored) */
+.vehicle-pin .pin-src {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  box-shadow: 0 0 0 2px oklch(0.15 0.015 258);
+}
+.vehicle-pin.is-stale {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
+/* Stops inside the radar (the original hid stop markers; the TPulso brief shows them) */
+.stop-pin.in-radar {
+  width: 10px;
+  height: 10px;
+}

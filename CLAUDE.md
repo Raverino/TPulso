@@ -10,6 +10,13 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
 - Never show internal IDs to the user (e.g. `[IA9T6]199_0`). Show line number, destination, stop name.
 - Identifiers must be linked through real GTFS keys (stop_id, trip_id, route/pattern id, shape_id), not by matching text. Only approved exception: `stripNamespace()` for the two links listed in docs/DATA.md §3.
 - Real-time times and scheduled times must be visibly distinguishable.
+- Data-source display rule (every departure and every vehicle shows its source; logic in `src/lib/sourceStatus.ts`):
+  - **Live**: green, solid, pulsing dot; time like "3 min".
+  - **Scheduled**: blue-grey, outline-only dot; time like "~3 min".
+  - **Stale**: grey, faded; text "last seen X ago".
+  - **Expected position** (later): dashed outline.
+  - Delay is shown as text ("+3 min") with an arrow, never by changing the source colour.
+  - Never rely on colour alone (shape, fill, motion and text must also differ). A small on-screen legend explains the states.
 - TEST mode: if the user is outside Portugal (or GPS is denied), use Marquês de Pombal (Metro) P1, Lisboa (38.725878, -9.151315; TML stop 060033) and show a clear "TEST" label in the UI. (Avenida da Liberdade was dropped: it has no TML stops within 500 m — see docs/DATA.md.)
 - Radar radii: 100 m, 200 m, 500 m, 1000 m.
 - Time zone: Europe/Lisbon.
@@ -27,3 +34,9 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
 
 ## Stack (proposed, confirm on day 1)
 TypeScript, React, Vite or TanStack Start, Tailwind, Leaflet or MapLibre, Cloudflare Workers for deployment. No database in the MVP.
+
+## Reuse the original OV Pulse (IMPORTANT)
+TPulso is the Lisbon version of OV Pulse, not a new design. A read-only copy of the original is in `reference/ovpulse/` (see `reference/README.md`, git-ignored, never commit it, never edit the original `Dutch-Routes`).
+- Read `reference/README.md` first, then reuse the original's screen layout, map behaviour, panels, departure list split (in radar / outside radar), vehicle cards, follow/pin, Help and Feedback panels, countdown ticking, design tokens (`styles.css`), icons and PWA manifest. Match its look and feel.
+- Replace only the data layer: TML provider with exact IDs (docs/DATA.md), no simulated data, no OVapi/NS/OSM fuzzy matching, Lisbon time zone, Portuguese-friendly wording (keep English UI text unless told otherwise).
+- When the new screen differs from the original's look or behaviour, the original is right unless BRIEF.md or this file says otherwise.

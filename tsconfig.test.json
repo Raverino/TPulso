@@ -6,6 +6,6 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": ["**/*.test.ts", "worker", "shared", "fixtures/*.json"],
+  "include": ["**/*.test.ts", "worker", "shared", "src/lib", "fixtures/*.json"],
   "exclude": ["node_modules", "dist"]
 }

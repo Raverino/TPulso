@@ -51,6 +51,7 @@ export interface RawPattern {
   headsign: string;
   shape_id: string;
   valid_on: string[];
+  path: { stop_id: string; stop_sequence: number }[];
 }
 
 export interface RawShape {

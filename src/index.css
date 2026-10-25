@@ -1,5 +1,0 @@
-@import "tailwindcss";
-@import "leaflet/dist/leaflet.css";
-
-html, body, #root { height: 100%; }
-body { margin: 0; background: #0f172a; color: #f1f5f9; -webkit-tap-highlight-color: transparent; }

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LISBON } from '../shared/region';
-import type { DepartureList, StopList, VehicleList, VehicleRoute } from '../shared/types';
+import type { Board, DepartureList, StopList, VehicleList, VehicleRoute } from '../shared/types';
 import { handleApi } from './index';
 import { TML_BASE_URL, TmlClient } from './providers/tml/client';
 import { TmlProvider } from './providers/tml/provider';
@@ -70,11 +70,33 @@ describe('GET /api/stops/:id/departures', () => {
   });
 });
 
+describe('GET /api/board', () => {
+  const { lat, lng } = LISBON.testLocation;
+  it('combines departures of all stops inside the radius, soonest first, tagged with their stop', async () => {
+    const body = (await (await api(`/api/board?lat=${lat}&lng=${lng}&radius=500`).res).json()) as Board;
+    expect(body.stopsInRadius).toBe(7);
+    expect(body.stopsQueried).toBe(7);
+    const d = body.departures.find(x => x.tripId === meta.chosen_vehicle.trip_id)!;
+    expect(d).toMatchObject({ stopId: '060035', stopName: 'R Joaquim António Aguiar', line: '3715' });
+    expect(d.distanceM).toBeGreaterThan(300);
+    const at = body.departures.map(x => x.estimatedAt ?? x.scheduledAt);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(new Set(body.departures.map(x => x.id)).size).toBe(body.departures.length);
+  });
+  it('limits the radius to 1000 m', async () => {
+    expect((await api(`/api/board?lat=${lat}&lng=${lng}&radius=1500`).res).status).toBe(400);
+  });
+  it('reports an outage when every stop fails, instead of an empty board', async () => {
+    await expect(api(`/api/board?lat=${lat}&lng=${lng}&radius=500`, true).res).rejects.toThrow();
+  });
+});
+
 describe('GET /api/vehicles', () => {
-  it('returns vehicles near a point', async () => {
+  it('returns vehicles near a point, with destination when the route data exists', async () => {
     const { lat, lng } = LISBON.testLocation;
     const body = (await (await api(`/api/vehicles?lat=${lat}&lng=${lng}&radius=1000`).res).json()) as VehicleList;
-    expect(body.vehicles.some(v => v.id === meta.chosen_vehicle.id)).toBe(true);
+    const v = body.vehicles.find(x => x.id === meta.chosen_vehicle.id)!;
+    expect(v.headsign).toBe('Santa Marta do Pinhal (via Centro Sul)');
   });
   it('validates the position and radius', async () => {
     expect((await api('/api/vehicles').res).status).toBe(400);
@@ -88,6 +110,9 @@ describe('GET /api/vehicles/:id/route', () => {
     const body = (await res.json()) as VehicleRoute;
     expect(body).toMatchObject({ line: '3715', headsign: 'Santa Marta do Pinhal (via Centro Sul)' });
     expect(body.path.length).toBe(1079);
+    expect(body.stopIds).toHaveLength(31);
+    expect(body.stopIds.slice(0, 2)).toEqual(['060405', '060035']);
+    expect(body.nextStopId).toBe('060035');
   });
   it('404s for a vehicle not in the feed', async () => {
     expect((await api('/api/vehicles/nope/route').res).status).toBe(404);

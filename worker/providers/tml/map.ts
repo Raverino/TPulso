@@ -2,7 +2,7 @@
 // tested directly against fixtures/.
 
 import { distanceMeters } from '../../../shared/geo';
-import type { Departure, LatLng, StopLite, Vehicle, VehicleRoute } from '../../../shared/types';
+import type { BoardDeparture, Departure, LatLng, StopLite, Vehicle, VehicleRoute } from '../../../shared/types';
 import { stripNamespace } from './ids';
 import type { RawArrival, RawLine, RawPattern, RawShape, RawStop, RawVehicle } from './raw';
 
@@ -63,7 +63,7 @@ export function toDepartures(
   return out.slice(0, win.max).map(x => x.d);
 }
 
-export function toVehicle(v: RawVehicle, lines: LinesById): Vehicle {
+export function toVehicle(v: RawVehicle, lines: LinesById, headsign: string | null = null): Vehicle {
   const line = lines.get(v.line_id);
   return {
     id: v.id,
@@ -74,6 +74,7 @@ export function toVehicle(v: RawVehicle, lines: LinesById): Vehicle {
     lineColor: line?.color ?? null,
     lineTextColor: line?.text_color ?? null,
     tripId: v.trip_id,
+    headsign,
     timestamp: v.timestamp,
   };
 }
@@ -83,10 +84,27 @@ export function hasPosition(v: RawVehicle): boolean {
   return Number.isFinite(v.lat) && Number.isFinite(v.lon) && !(v.lat === 0 && v.lon === 0);
 }
 
+/** Raw vehicles with a GPS fix inside the radius. */
+export function rawVehiclesNear(vehicles: readonly RawVehicle[], center: LatLng, radiusM: number): RawVehicle[] {
+  return vehicles.filter(v => hasPosition(v) && distanceMeters({ lat: v.lat, lng: v.lon }, center) <= radiusM);
+}
+
 export function toVehiclesNear(vehicles: readonly RawVehicle[], lines: LinesById, center: LatLng, radiusM: number): Vehicle[] {
-  return vehicles
-    .filter(v => hasPosition(v) && distanceMeters({ lat: v.lat, lng: v.lon }, center) <= radiusM)
-    .map(v => toVehicle(v, lines));
+  return rawVehiclesNear(vehicles, center, radiusM).map(v => toVehicle(v, lines));
+}
+
+/** One stop's departures, tagged with the stop, for the combined board. */
+export function toBoardDepartures(stop: StopLite & { distance: number }, deps: readonly Departure[]): BoardDeparture[] {
+  return deps.map(d => ({
+    ...d,
+    // trip_id is unique per trip; scheduled-only rows have none, so fall back to line + destination + time.
+    id: `${d.tripId ?? `${d.line}|${d.headsign}|${d.scheduledAt}`}@${stop.id}`,
+    stopId: stop.id,
+    stopName: stop.name,
+    stopLat: stop.lat,
+    stopLng: stop.lng,
+    distanceM: Math.round(stop.distance),
+  }));
 }
 
 /** "YYYYMMDD" calendar date in the given time zone. */
@@ -109,5 +127,7 @@ export function toVehicleRoute(v: RawVehicle, lines: LinesById, pattern: RawPatt
     lineColor: line?.color ?? null,
     headsign: pattern?.headsign ?? null,
     path: shape ? shape.geojson.geometry.coordinates.map(([lng, lat]): [number, number] => [lat, lng]) : [],
+    stopIds: pattern ? [...pattern.path].sort((a, b) => a.stop_sequence - b.stop_sequence).map(p => p.stop_id) : [],
+    nextStopId: /^\d{6}$/.test(v.stop_id) ? v.stop_id : null,
   };
 }
