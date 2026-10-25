@@ -1,23 +1,16 @@
-// Ported from the original OV Pulse src/routes/index.tsx (Index + Clock). The markup, layout, panels and
-// behaviour are the original's; the data effects are replaced by the TML worker endpoints:
-//   /api/live       -> /api/vehicles   (useVehicles)
-//   /api/departures -> /api/board      (useBoard) + /api/stops/:id/departures for a pinned/tapped stop
-//   /api/routes     -> /api/vehicles/:id/route (official GTFS shape per vehicle, exact IDs)
-// Removed: seedStops/stepVehicles/mergeLive (simulated or fuzzy-matched data), NS platform trains,
-// OSM area loading. Every TPulso change is marked "TPulso:".
+// Ported from the original OV Pulse src/routes/index.tsx (Index + Clock): markup, layout, panels and behaviour
+// are the original's. TPulso offline version: all data comes from the converted timetable files
+// (docs/OFFLINE.md) — Scheduled departures and Expected vehicle positions. No live API is called
+// (the live code is kept behind LIVE_ENABLED, off). Every TPulso change is marked "TPulso:".
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, MessageSquare, Radar, Ship, TrainFront, TramFront } from "lucide-react";
+import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
 
-import ArrivalsDrawer, { type StopPanel } from "@/components/transit/ArrivalsDrawer";
+import ArrivalsDrawer, { type HelpInfo, type StopPanel } from "@/components/transit/ArrivalsDrawer";
 import {
-  DATA_MODE,
   clockSec,
   distanceMeters,
-  fromApiVehicle,
   isInside,
-  stopDeparturesToLive,
-  toLiveDeparture,
-  toTransitRoute,
+  prepareRoute,
   type Arrival,
   type FilterMode,
   type LiveDeparture,
@@ -25,29 +18,29 @@ import {
   type Radius,
   type Stop,
   type TransitRoute,
+  type TransportMode,
   type UpcomingStop,
   type Vehicle,
 } from "@/lib/transit";
-// TPulso: our data layer, region config and display rule.
+// TPulso: offline timetable data layer, region config and display rule.
 import { LISBON } from "../shared/region";
 import { withinRadius } from "../shared/geo";
+import { addDays, decodePolyline, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
-import { loadStops, type StopsResult } from "@/lib/stopCache";
 import { countdownLabel } from "@/lib/sourceStatus";
-import { buildStopEtas, recentSpeedMps } from "@/lib/eta";
-import { useBoard } from "@/lib/useBoard";
 import { useLocation, type TestReason } from "@/lib/useLocation";
-import { useStopDepartures } from "@/lib/useStopDepartures";
-import { useVehicleRoutes } from "@/lib/useVehicleRoutes";
-import { useVehicleStopTimes } from "@/lib/useVehicleStopTimes";
-import { useVehicles } from "@/lib/useVehicles";
+import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ScheduledDeparture } from "@/offline/engine";
+import { downloadRegion, loadRoute, regionBytes } from "@/offline/store";
+import { useTimetable } from "@/offline/useTimetable";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
 
 const region = LISBON;
 const RADII = region.radii as Radius[];
+/** Departures in the next 10 minutes, as in the original. */
+const WINDOW_MS = 600_000;
 
-// TPulso: Ferry added; modes without data stay visible but disabled ("no data yet").
+// TPulso: Ferry added; modes without timetable data stay visible but disabled ("no data yet").
 const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
   { key: "all", label: "All", icon: null },
   { key: "bus", label: "Bus", icon: Bus },
@@ -55,7 +48,6 @@ const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
   { key: "tram", label: "Tram/Metro", icon: TramFront },
   { key: "ferry", label: "Ferry", icon: Ship },
 ];
-const hasData = (k: FilterMode) => k === "all" || region.modesWithData.includes(k);
 
 const TEST_REASON: Record<TestReason, string> = {
   denied: "Location is off",
@@ -64,10 +56,14 @@ const TEST_REASON: Record<TestReason, string> = {
   outside: "You are outside Portugal",
 };
 
-type StopsState = { status: "loading" } | { status: "error"; message: string } | ({ status: "ready" } & StopsResult);
+const fmtDate = (d: string) => `${d.slice(6, 8)}/${d.slice(4, 6)}`;
+
+interface AreaStop extends Stop {
+  modes: Set<TransportMode>;
+}
 
 export default function App() {
-  // TPulso: GPS with the Marquês de Pombal TEST fallback (useLocation) instead of Amsterdam/Utrecht.
+  // TPulso: GPS with the Marquês de Pombal TEST fallback.
   const { state: loc, locate: relocate } = useLocation(region);
   const gps: "pending" | "granted" | "denied" = loc.mode === "locating" ? "pending" : loc.mode === "gps" ? "granted" : "denied";
   const center = loc.mode === "locating" ? { lat: region.testLocation.lat, lng: region.testLocation.lng } : loc.position;
@@ -88,34 +84,101 @@ export default function App() {
   }, []);
   const now = useMemo(() => Date.now(), [tick]); // eslint-disable-line react-hooks/exhaustive-deps
   const nowSec = Math.floor(now / 1000);
+  // Departure lists don't need recomputing every second: every 15 s (countdowns still tick each second).
+  const boardNow = Math.floor(now / 15_000) * 15_000;
 
-  // TPulso: real stops from the cached trimmed stop list (the original drew none; it seeded fake ones).
-  const [stopsState, setStopsState] = useState<StopsState>({ status: "loading" });
+  // TPulso: the offline timetable around the radar.
+  const tt = useTimetable(hasCenter ? center : null, radius);
+  const manifest = tt.manifest;
+  const expired = !!manifest && isExpired(manifest, now);
   useEffect(() => {
-    loadStops()
-      .then((r) => setStopsState({ status: "ready", ...r }))
-      .catch((e: Error) => setStopsState({ status: "error", message: e.message }));
-  }, []);
-  const stopById = useMemo(
-    () => new Map(stopsState.status === "ready" ? stopsState.stops.map((s) => [s.id, s]) : []),
-    [stopsState],
-  );
+    if (manifest) navigator.serviceWorker?.controller?.postMessage({ type: "timetable-version", version: manifest.version });
+  }, [manifest]);
+  const opName = useMemo(() => new Map((manifest?.operators ?? []).map((o) => [o.id, o.name])), [manifest]);
+  const modesWithData = useMemo(() => new Set((manifest?.operators ?? []).flatMap((o) => o.modes)), [manifest]);
+  const hasData = (k: FilterMode) => k === "all" || modesWithData.has(k as TransportMode);
+
+  // Stops of the loaded areas, with the modes serving them.
+  const allStops = useMemo(() => {
+    const m = new Map<string, AreaStop>();
+    for (const a of tt.areas) {
+      for (const [id, name, lat, lng] of a.stops) if (!m.has(id)) m.set(id, { id, name, lat, lng, mode: "bus", modes: new Set() });
+      for (const p of a.patterns) for (const id of p.stops) m.get(id)?.modes.add(p.mode);
+    }
+    for (const s of m.values()) s.mode = s.modes.has("train") ? "train" : s.modes.has("tram") ? "tram" : s.modes.has("ferry") ? "ferry" : "bus";
+    return [...m.values()];
+  }, [tt.areas]);
   const nearStops = useMemo(
-    () => (hasCenter && stopsState.status === "ready" ? withinRadius(stopsState.stops, center, radius) : []),
+    () =>
+      hasCenter
+        ? withinRadius(
+            allStops.filter((s) => filter === "all" || s.modes.has(filter as TransportMode)),
+            center,
+            radius,
+          )
+        : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hasCenter, center.lat, center.lng, stopsState, radius],
+    [hasCenter, center.lat, center.lng, allStops, radius, filter],
   );
-  const stops: Stop[] = useMemo(() => nearStops.map((s) => ({ id: s.id, name: s.name, mode: DATA_MODE, lat: s.lat, lng: s.lng })), [nearStops]);
+  const stops: Stop[] = nearStops;
 
-  // Live vehicle positions (TPulso: /api/vehicles, refreshed every 15 s like the original).
-  const live = useVehicles(hasCenter ? center : null, radius);
-  const liveStatus: "connecting" | "live" | "offline" = live.error ? "offline" : live.updatedAt !== null ? "live" : "connecting";
-  const feedAt = live.updatedAt;
-  const newestFix = live.vehicles.reduce((m, v) => Math.max(m, v.timestamp), 0);
-  const feedStale = newestFix ? Math.max(0, (now - newestFix) / 1000) : 0;
+  // TPulso: Expected vehicles — positions calculated from the timetable, recomputed every second.
+  const expected = useMemo(
+    () => (manifest && !expired ? expectedVehicles(manifest, tt.areas, now) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [manifest, expired, tt.areas, tick],
+  );
+  const vehicles: Vehicle[] = useMemo(
+    () =>
+      expected.map((v) => ({
+        id: v.key,
+        mode: v.mode,
+        line: v.line,
+        operator: opName.get(v.op) ?? v.op,
+        headsign: v.headsign,
+        lat: v.lat,
+        lng: v.lng,
+        bearing: v.bearing,
+        speedKmh: NaN,
+        punctualityMin: NaN,
+        routeId: String(v.patternId),
+        tripId: v.key,
+        live: false,
+      })),
+    [expected, opName],
+  );
+  const expectedByKey = useMemo(() => new Map(expected.map((v) => [v.key, v])), [expected]);
+  const vehicleByKey = useMemo(() => new Map(vehicles.map((v) => [v.tripId, v])), [vehicles]);
 
-  // Live departure boards for stops inside the radar (+ the stop of the connection you follow).
-  const boardState = useBoard(hasCenter ? center : null, radius);
+  // TPulso: departures for every stop inside the radar, from the timetable (Scheduled).
+  const toLive = useCallback(
+    (d: ScheduledDeparture, s: { id: string; name: string; lat: number; lng: number }): LiveDeparture => ({
+      id: `${d.tripKey}@${s.id}`,
+      vehicleKey: d.tripKey,
+      stopArea: s.id,
+      stopName: s.name,
+      stopLat: s.lat,
+      stopLng: s.lng,
+      distanceM: Math.round(distanceMeters(center, s)),
+      line: d.line,
+      mode: d.mode,
+      destination: d.headsign,
+      operator: opName.get(d.op) ?? d.op,
+      expectedAt: d.atMs,
+      plannedAt: d.atMs,
+      delaySec: 0,
+      realtime: false,
+      cancelled: false,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [center.lat, center.lng, opName],
+  );
+  const board: LiveDeparture[] | null = useMemo(() => {
+    if (!manifest || tt.loading) return tt.areas.length ? [] : null;
+    if (expired) return [];
+    return nearStops.flatMap((s) => departuresAtStop(manifest, tt.areas, s.id, boardNow - 30_000, boardNow + WINDOW_MS + 15_000).map((d) => toLive(d, s)));
+  }, [manifest, tt.loading, tt.areas, expired, nearStops, boardNow, toLive]);
+
   const [pinned, setPinned] = useState<Pinned | null>(null);
   useEffect(() => {
     try {
@@ -134,73 +197,16 @@ export default function App() {
       /* ignore */
     }
   }, []);
-  // TPulso: the pinned stop may be outside the radar: fetch its own departures (exact stop_id).
-  const pinnedOutside = !!(pinned && boardState.board && !boardState.board.stopIds.includes(pinned.stopArea));
-  const pinnedFetch = useStopDepartures(pinnedOutside ? pinned!.stopArea : null);
-  const board: LiveDeparture[] | null = useMemo(() => {
-    if (!boardState.board) return null;
-    const rows = boardState.board.departures.map(toLiveDeparture);
-    if (pinnedOutside && pinned && pinnedFetch.list) {
-      rows.push(
-        ...stopDeparturesToLive(
-          {
-            id: pinned.stopArea,
-            name: pinned.stopName,
-            lat: pinned.stopLat,
-            lng: pinned.stopLng,
-            distanceM: Math.round(distanceMeters(center, { lat: pinned.stopLat, lng: pinned.stopLng })),
-          },
-          pinnedFetch.list.departures,
-        ),
-      );
-    }
-    return rows;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boardState.board, pinnedOutside, pinned, pinnedFetch.list]);
-  const boardAgeSec = boardState.fetchedAt ? (now - boardState.fetchedAt) / 1000 : 0;
 
-  // Routes (official shapes) for the vehicles on the radar.
-  const routeEntries = useVehicleRoutes(live.vehicles);
-  const routes = useMemo(() => {
-    const m = new Map<string, TransitRoute>();
-    for (const [id, e] of routeEntries) if (e.status === "ready" && e.route.path.length > 1) m.set(id, toTransitRoute(e.route));
-    return m;
-  }, [routeEntries]);
-
-  // TPulso: API vehicles -> the original's Vehicle. Punctuality from this trip's live row on the board
-  // (exact trip_id), speed from its recent GPS fixes; NaN = not known (never shown as "on time").
-  const vehicles: Vehicle[] = useMemo(
-    () =>
-      live.vehicles.map((v) => {
-        const mine = boardState.board?.departures.filter((d) => d.tripId === v.tripId && d.estimatedAt !== null) ?? [];
-        const entry = routeEntries.get(v.id);
-        const next = entry?.status === "ready" ? mine.find((d) => d.stopId === entry.route.nextStopId) : undefined;
-        const d = next ?? mine[0];
-        const fixes = live.fixes.get(v.id);
-        const path = entry?.status === "ready" ? entry.route.path : [];
-        // Measured speed for the card (unclamped); estimates use the clamped value.
-        const speed = fixes ? recentSpeedMps(fixes, path, undefined, false) : null;
-        return fromApiVehicle(v, {
-          speedKmh: speed !== null ? speed * 3.6 : NaN,
-          punctualityMin: d ? Math.round((d.estimatedAt! - d.scheduledAt) / 60) : NaN,
-          ...(d ? { delaySec: d.estimatedAt! - d.scheduledAt } : {}),
-          routeUnavailable: entry?.status === "ready" && entry.route.stopIds.length === 0,
-        });
-      }),
-    [live.vehicles, live.fixes, boardState.board, routeEntries],
-  );
-
-  const vehicleByKey = useMemo(() => new Map(vehicles.map((v) => [v.tripId, v])), [vehicles]);
-
-  // Real departures from the live board, inside the radar, leaving within 10 minutes, soonest first.
-  // TPulso: no fallback to departures estimated from vehicles (the original's OSM-based estimate).
+  // Departures inside the radar, leaving within 10 minutes, soonest first (as in the original).
   const arrivals = useMemo(() => {
     if (!board) return [];
     const seen = new Set<string>();
     const out: Arrival[] = [];
     for (const d of board) {
       if (filter !== "all" && d.mode !== filter) continue;
-      if (d.distanceM > radius) continue; // pinned stop may be far away
+      if (d.distanceM > radius) continue;
+      if (d.expectedAt < now - 30_000 || d.expectedAt > now + WINDOW_MS) continue;
       const k = `${d.vehicleKey}@${d.stopName}`;
       if (seen.has(k)) continue;
       seen.add(k);
@@ -214,61 +220,32 @@ export default function App() {
         headsign: d.destination,
         minutes: Math.max(0, Math.round((d.expectedAt - now) / 60_000)),
         etaSec: Math.max(0, Math.round((d.expectedAt - now) / 1000)),
-        delayMin: Math.round(d.delaySec / 60),
+        delayMin: 0,
         distanceM: d.distanceM,
         vehicleKey: d.vehicleKey,
         stopArea: d.stopArea,
         expectedAt: d.expectedAt,
-        realtime: d.realtime,
-        cancelled: d.cancelled,
-        ...(d.skipped ? { skipped: true } : {}),
+        realtime: false,
+        cancelled: false,
         ...(v ? { vehicleId: v.id } : {}),
       });
     }
-    const ids = new Set<string>();
-    return out
-      .filter((a) => a.distanceM <= radius && (a.expectedAt ?? 0) - now >= -60_000 && (a.etaSec ?? 0) <= 600 && !ids.has(a.id) && ids.add(a.id))
-      .sort((a, b) => (a.etaSec ?? 0) - (b.etaSec ?? 0))
-      .slice(0, 30);
+    return out.sort((a, b) => (a.etaSec ?? 0) - (b.etaSec ?? 0)).slice(0, 30);
   }, [board, vehicleByKey, radius, filter, now]);
 
-  const boardNote = useMemo(() => {
-    const b = boardState.board;
-    if (!b) return null;
-    const parts: string[] = [];
-    if (b.stopsQueried < b.stopsInRadius) parts.push(`Showing the nearest ${b.stopsQueried} of ${b.stopsInRadius} stops.`);
-    if (b.stopsFailed > 0) parts.push(`${b.stopsFailed} stop${b.stopsFailed === 1 ? "" : "s"} could not be loaded.`);
-    if (boardState.error) parts.push(`Refresh failed (${boardState.error}).`);
-    return parts.join(" ") || null;
-  }, [boardState.board, boardState.error]);
-
-  // The followed connection: its live departure at your stop + where the vehicle is now.
+  // The followed connection: its scheduled departure at your stop + where its vehicle is expected now.
   const followed = useMemo(() => {
     if (!pinned) return null;
     const dep = board?.find((d) => d.vehicleKey === pinned.vehicleKey && d.stopArea === pinned.stopArea) ?? null;
     const v = vehicleByKey.get(pinned.vehicleKey) ?? null;
-    return {
-      pinned,
-      dep,
-      vehicle: v,
-      vehicleDistM: v ? Math.round(distanceMeters(v, { lat: pinned.stopLat, lng: pinned.stopLng })) : null,
-    };
+    return { pinned, dep, vehicle: v, vehicleDistM: v ? Math.round(distanceMeters(v, { lat: pinned.stopLat, lng: pinned.stopLng })) : null };
   }, [pinned, board, vehicleByKey]);
 
   const pinArrival = useCallback(
     (a: Arrival) => {
       const d = board?.find((x) => x.id === a.id);
       if (!d) return;
-      pin({
-        vehicleKey: d.vehicleKey,
-        stopArea: d.stopArea,
-        stopName: d.stopName,
-        stopLat: d.stopLat,
-        stopLng: d.stopLng,
-        line: d.line,
-        mode: d.mode,
-        destination: d.destination,
-      });
+      pin({ vehicleKey: d.vehicleKey, stopArea: d.stopArea, stopName: d.stopName, stopLat: d.stopLat, stopLng: d.stopLng, line: d.line, mode: d.mode, destination: d.destination });
     },
     [board, pin],
   );
@@ -282,7 +259,7 @@ export default function App() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [panelView, setPanelView] = useState<"results" | "help" | "feedback" | "stop">("results");
+  const [panelView, setPanelView] = useState<"results" | "help" | "stop">("results");
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const resetPanel = useCallback(() => {
     setPanelView("results");
@@ -291,7 +268,7 @@ export default function App() {
     setOpenId(null);
     pin(null);
   }, [pin]);
-  const openPanel = useCallback((view: "help" | "feedback") => {
+  const openPanel = useCallback((view: "help") => {
     setSelectedId(null);
     setOpenId(null);
     setPanelView(view);
@@ -300,79 +277,80 @@ export default function App() {
     const d = openId ? board?.find((x) => x.id === openId) : undefined;
     if (!d) return null;
     const v = vehicleByKey.get(d.vehicleKey);
-    const state = boardAgeSec > 90 ? "stale" : d.realtime ? "live" : "scheduled";
-    return {
-      lat: d.stopLat,
-      lng: d.stopLng,
-      name: d.stopName,
-      label: countdownLabel(Math.round(d.expectedAt / 1000), nowSec, state),
-      vehicleId: v?.id ?? null,
-    };
-  }, [openId, board, vehicleByKey, nowSec, boardAgeSec]);
+    return { lat: d.stopLat, lng: d.stopLng, name: d.stopName, label: countdownLabel(Math.round(d.expectedAt / 1000), nowSec, "scheduled"), vehicleId: v?.id ?? null };
+  }, [openId, board, vehicleByKey, nowSec]);
   const selected = selectedId ? visibleVehicles.find((v) => v.id === selectedId) : undefined;
-  // Flip back once the vehicle leaves the radar or gets filtered out.
+  // Flip back once the vehicle leaves the radar or its trip ends.
   useEffect(() => {
-    if (selectedId && !selected && live.updatedAt !== null) setSelectedId(null);
-  }, [selectedId, selected, live.updatedAt]);
-  const selectedRoute = selected ? routes.get(selected.routeId) : undefined;
-  const selectedEntry = selectedId ? routeEntries.get(selectedId) : undefined;
+    if (selectedId && !selected) setSelectedId(null);
+  }, [selectedId, selected]);
 
-  // TPulso: an expected time for every upcoming stop (src/lib/eta.ts): Live / Scheduled from this trip's
-  // own rows (exact trip_id; next ~10 stops + board), otherwise Estimated from route distance and speed.
-  const stopTimes = useVehicleStopTimes(selectedId);
+  // TPulso: the selected vehicle's full route (route file): route line + scheduled time at each upcoming stop.
+  const selectedExp = selectedId ? expectedByKey.get(selectedId) : undefined;
+  const selectedPattern = selectedExp?.patternId;
+  const [routeFile, setRouteFile] = useState<{ status: "idle" | "loading" | "ready" | "error"; route?: RouteFile }>({ status: "idle" });
+  useEffect(() => {
+    if (!manifest || selectedPattern === undefined) {
+      setRouteFile({ status: "idle" });
+      return;
+    }
+    let stop = false;
+    setRouteFile({ status: "loading" });
+    loadRoute(manifest, selectedPattern)
+      .then((route) => !stop && setRouteFile({ status: "ready", route }))
+      .catch(() => !stop && setRouteFile({ status: "error" }));
+    return () => {
+      stop = true;
+    };
+  }, [manifest, selectedPattern]);
+
+  // Route lines: slices from the loaded areas for vehicles on the radar, the full route for the selected one.
+  const routes = useMemo(() => {
+    const m = new Map<string, TransitRoute>();
+    const wanted = new Set(visibleVehicles.map((v) => v.routeId));
+    for (const a of tt.areas) {
+      for (const p of a.patterns) {
+        if (!wanted.has(String(p.id))) continue;
+        const id = `${p.id}|${a.area}`;
+        if (!m.has(id)) m.set(id, { ...prepareRoute({ id, mode: p.mode, line: p.line, headsign: p.headsign, operator: opName.get(p.op) ?? p.op, path: decodePolyline(p.shape) }), group: String(p.id) });
+      }
+    }
+    if (routeFile.route) {
+      const r = routeFile.route;
+      m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id) });
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tt.areas, visibleVehicles.map((v) => v.routeId).join(","), routeFile.route, opName]);
+  const selectedRoute = selected ? routes.get(`full|${selected.routeId}`) : undefined;
+
   const { upcoming, beyond } = useMemo(() => {
     const none = { upcoming: [] as UpcomingStop[], beyond: [] as UpcomingStop[] };
-    if (!selected || selectedEntry?.status !== "ready") return none;
-    const r = selectedEntry.route;
-    const from = r.nextStopId ? r.stopIds.indexOf(r.nextStopId) : -1;
-    const routeStops = (from >= 0 ? r.stopIds.slice(from) : []).flatMap((id) => {
-      const s = stopById.get(id);
-      return s ? [{ id, name: s.name, lat: s.lat, lng: s.lng }] : [];
-    });
-    const times = new Map((stopTimes?.vehicleId === selected.id ? stopTimes.times : []).map((t) => [t.stopId, t]));
-    for (const d of boardState.board?.departures ?? []) {
-      if (d.tripId === selected.tripId && !times.has(d.stopId)) times.set(d.stopId, d);
-    }
-    const fixes = live.fixes.get(selected.id);
-    const etas = buildStopEtas({
-      stops: routeStops,
-      path: r.path,
-      vehicle: selected,
-      nowSec,
-      speedMps: fixes ? recentSpeedMps(fixes, r.path) : null,
-      times: [...times.values()],
-    });
-    const list: UpcomingStop[] = etas.map((e, i) => ({
-      key: `${r.vehicleId}-${i}-${e.id}`,
-      stopId: e.id,
-      name: e.name,
-      lat: e.lat,
-      lng: e.lng,
-      aheadM: e.aheadM,
-      etaS: e.atSec - nowSec,
-      state: e.state,
+    const r = routeFile.route;
+    if (!selectedExp || !r || r.id !== selectedExp.patternId) return none;
+    const seg = selectedExp.segment;
+    const along = r.dist[seg.from]! + seg.f * (r.dist[seg.to]! - r.dist[seg.from]!);
+    const list: UpcomingStop[] = upcomingStops(r, selectedExp.tripIndex, selectedExp.serviceDate, selectedExp.nextStopIndex).map((u) => ({
+      key: `${r.id}-${u.index}`,
+      stopId: u.stop[0],
+      name: u.stop[1],
+      lat: u.stop[2],
+      lng: u.stop[3],
+      aheadM: Math.max(0, Math.round(r.dist[u.index]! - along)),
+      etaS: (u.atMs - now) / 1000,
+      state: "scheduled",
     }));
     return { upcoming: list.filter((u) => isInside(u, center, radius)), beyond: list.filter((u) => !isInside(u, center, radius)) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, selectedEntry, stopById, stopTimes, boardState.board, live.fixes, nowSec, center.lat, center.lng, radius]);
+  }, [selectedExp, routeFile.route, now, center.lat, center.lng, radius]);
 
-  // TPulso: tapping a stop opens its departures for the next 10 minutes (board rows when the board
-  // covers the stop, otherwise the stop's own departures).
+  // TPulso: tapping a stop shows its departures in the next 10 minutes.
   const tappedStop = selectedStopId ? nearStops.find((s) => s.id === selectedStopId) : undefined;
-  const tappedOnBoard = !!(tappedStop && boardState.board?.stopIds.includes(tappedStop.id));
-  const tappedFetch = useStopDepartures(tappedStop && boardState.board && !tappedOnBoard ? tappedStop.id : null);
   const stopPanel: StopPanel | null = useMemo(() => {
-    if (!tappedStop) return null;
-    const inWindow = (d: LiveDeparture) => d.expectedAt - now >= -60_000 && d.expectedAt - now <= 600_000;
-    const base = { id: tappedStop.id, name: tappedStop.name, distanceM: Math.round(tappedStop.distance) };
-    if (tappedOnBoard && board) {
-      return { ...base, departures: board.filter((d) => d.stopArea === tappedStop.id && inWindow(d)), fetchedAt: boardState.fetchedAt, error: boardState.error };
-    }
-    const rows = tappedFetch.list
-      ? stopDeparturesToLive({ ...base, lat: tappedStop.lat, lng: tappedStop.lng }, tappedFetch.list.departures).filter(inWindow).sort((a, b) => a.expectedAt - b.expectedAt)
-      : null;
-    return { ...base, departures: rows, fetchedAt: tappedFetch.fetchedAt, error: tappedFetch.error ?? (boardState.board ? null : boardState.error) };
-  }, [tappedStop, tappedOnBoard, board, boardState.fetchedAt, boardState.error, boardState.board, tappedFetch, now]);
+    if (!tappedStop || !manifest) return null;
+    const rows = expired ? [] : departuresAtStop(manifest, tt.areas, tappedStop.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, tappedStop));
+    return { id: tappedStop.id, name: tappedStop.name, distanceM: Math.round(tappedStop.distance), departures: rows, fetchedAt: now, error: null };
+  }, [tappedStop, manifest, expired, tt.areas, now, toLive]);
   const selectStop = useCallback(
     (id: string) => {
       setSelectedId(null);
@@ -387,6 +365,23 @@ export default function App() {
     },
     [panelView, selectedStopId],
   );
+
+  // TPulso: Help shows the timetable's dates per operator and offers to save the whole region.
+  const [dl, setDl] = useState<HelpInfo["download"]>({ state: "idle", done: 0, total: 0 });
+  const help: HelpInfo = {
+    window: manifest ? `${fmtDate(manifest.window.first)}–${fmtDate(addDays(manifest.window.first, manifest.window.days - 1))}` : "—",
+    operators: manifest?.operators ?? [],
+    excluded: manifest?.excluded ?? [],
+    regionMB: manifest ? regionBytes(manifest) / 1e6 : null,
+    download: dl,
+    onDownload: () => {
+      if (!manifest) return;
+      setDl({ state: "running", done: 0, total: Object.keys(manifest.areas).length });
+      downloadRegion(manifest, (done, total) => setDl({ state: "running", done, total }))
+        .then(() => setDl((d) => ({ ...d, state: "done" })))
+        .catch((e: Error) => setDl((d) => ({ ...d, state: "error", error: e.message })));
+    },
+  };
 
   const showOverlay = gps === "pending" || (gps === "denied" && !testAccepted);
 
@@ -406,19 +401,26 @@ export default function App() {
                 TEST
               </span>
             )}
+            {/* TPulso offline: always say this is not live */}
+            <span className="rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+              Timetable data, not live
+            </span>
           </h1>
           <p className="truncate text-[10px] text-muted-foreground">
             {gps === "pending" ? "Locating you… · " : gps === "granted" ? "" : `TEST location: ${region.testLocation.label} · `}
-            {liveStatus === "live" ? (
-              <span className="font-bold text-[oklch(0.78_0.19_145)]">
-                Live{feedStale > 45 ? ` (feed ${Math.round(feedStale / 60) || 1} min behind)` : ""}
-              </span>
-            ) : liveStatus === "offline" ? (
-              <span className="font-bold text-destructive">live feed unavailable</span>
-            ) : "connecting…"}
-            {` · ${inRange} vehicles in the area`}
-            {feedAt ? ` · updated ${clockSec(feedAt)}` : ""}
-            {stopsState.status === "loading" ? " · loading stops…" : stopsState.status === "error" ? " · stops unavailable" : ""}
+            {manifest ? (
+              expired ? (
+                <span className="font-bold text-destructive">timetable expired — connect to update</span>
+              ) : (
+                <span className="font-bold text-foreground/80">Timetable · valid {help.window}</span>
+              )
+            ) : tt.error ? (
+              <span className="font-bold text-destructive">timetable unavailable</span>
+            ) : (
+              "loading timetable…"
+            )}
+            {` · ${inRange} expected vehicles in the area`}
+            {tt.loading && manifest ? " · loading map areas…" : ""}
           </p>
         </div>
 
@@ -431,14 +433,6 @@ export default function App() {
             className={`grid size-7 place-items-center rounded-lg border transition-colors ${panelView === "help" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface-2 text-foreground/80"}`}
           >
             <CircleHelp className="size-3.5" />
-          </button>
-          <button
-            onClick={() => openPanel("feedback")}
-            aria-label="Send feedback"
-            title="Feedback"
-            className={`grid size-7 place-items-center rounded-lg border transition-colors ${panelView === "feedback" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface-2 text-foreground/80"}`}
-          >
-            <MessageSquare className="size-3.5" />
           </button>
         </div>
         <div className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
@@ -473,7 +467,6 @@ export default function App() {
                 {enabled ? (
                   <span className="hidden sm:inline">{label}</span>
                 ) : (
-                  // TPulso: disabled modes are labelled "no data yet"
                   <span className="flex flex-col items-start leading-[1.05]">
                     <span className="hidden sm:inline">{label}</span>
                     <span className="text-[8px] font-medium">no data yet</span>
@@ -532,10 +525,16 @@ export default function App() {
               </div>
             )}
           </Suspense>
-          {/* TPulso: legend of the data-source states */}
+          {/* TPulso: legend of the timetable states + "Timetable data, not live" */}
           <div className="pointer-events-none absolute bottom-6 left-2 z-[470]">
             <Legend />
           </div>
+          {expired && !showOverlay && (
+            <div className="absolute inset-x-0 top-10 z-[490] mx-auto w-fit rounded-xl border border-destructive/50 bg-surface px-3 py-2 text-center text-xs shadow-float">
+              <p className="font-display font-bold text-destructive">Timetable expired — connect to update</p>
+              <p className="text-muted-foreground">The saved timetable ended on {help.window.split("–")[1]}. No times are shown.</p>
+            </div>
+          )}
           {showOverlay && (
             <div className="absolute inset-0 z-[500] grid place-items-center bg-background/70 p-4 backdrop-blur-sm">
               <div className="flex max-w-xs flex-col items-center gap-3 rounded-2xl border border-border bg-surface p-5 text-center shadow-float">
@@ -554,8 +553,8 @@ export default function App() {
                   <>
                     <p className="font-display text-sm font-bold">{loc.mode === "test" ? TEST_REASON[loc.reason] : "Location is off"}</p>
                     <p className="text-xs text-muted-foreground">
-                      TPulso needs your location to show the buses around <em>you</em>. Right now the radar is centred on
-                      the <strong>TEST</strong> location: {region.testLocation.label}, Lisboa.
+                      TPulso needs your location to show the timetable around <em>you</em>. Right now the radar is centred on the{" "}
+                      <strong>TEST</strong> location: {region.testLocation.label}, Lisboa.
                     </p>
                     {!(loc.mode === "test" && loc.reason === "outside") && (
                       <button
@@ -573,8 +572,8 @@ export default function App() {
                       Continue with TEST location
                     </button>
                     <p className="text-[10px] leading-snug text-muted-foreground">
-                      Still nothing? Check your browser's location permission for this site (tap the lock/tune icon in the
-                      address bar) and that location services are on.
+                      Still nothing? Check your browser's location permission for this site (tap the lock/tune icon in the address bar) and that
+                      location services are on.
                     </p>
                   </>
                 )}
@@ -599,14 +598,14 @@ export default function App() {
               setSelectedId(id);
             }
           }}
-          live={!!board && arrivals.some((a) => a.realtime)}
+          live={false}
           followed={followed}
           onPin={pinArrival}
           onUnpin={() => pin(null)}
           canSelect={(id) => visibleVehicles.some((v) => v.id === id)}
           openId={openId}
           radarVehicles={visibleVehicles
-            .map((v) => ({ id: v.id, line: v.line, mode: v.mode, headsign: v.headsign, fixAt: v.fixAt ?? 0, distanceM: Math.round(distanceMeters(v, center)) }))
+            .map((v) => ({ id: v.id, line: v.line, mode: v.mode, headsign: v.headsign, distanceM: Math.round(distanceMeters(v, center)) }))
             .sort((a, b) => a.distanceM - b.distanceM)}
           onOpen={setOpenId}
           panelView={panelView}
@@ -615,10 +614,15 @@ export default function App() {
             setSelectedStopId(null);
           }}
           now={now}
-          boardAgeSec={boardAgeSec}
-          boardStatus={{ loading: hasCenter && !boardState.board && !boardState.error, error: boardState.board ? null : boardState.error, note: boardNote }}
+          boardAgeSec={0}
+          boardStatus={{
+            loading: hasCenter && !board && !tt.error,
+            error: board ? null : tt.error,
+            note: expired ? "Timetable expired — connect to update." : tt.error,
+          }}
           stop={stopPanel}
-          routeStatus={!selectedEntry ? "idle" : selectedEntry.status}
+          routeStatus={routeFile.status}
+          help={help}
         />
       </div>
     </main>

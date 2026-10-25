@@ -47,6 +47,7 @@
   --color-bus: var(--bus);
   --color-train: var(--train);
   --color-tram: var(--tram);
+  --color-ferry: var(--ferry);
   --color-locate: var(--locate);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -82,6 +83,8 @@
   --bus: oklch(0.82 0.17 82);
   --train: oklch(0.72 0.15 232);
   --tram: oklch(0.72 0.17 340);
+  /* TPulso: ferries (the original had none) */
+  --ferry: oklch(0.78 0.12 195);
   --locate: oklch(0.68 0.19 258);
 }
 
@@ -228,6 +231,9 @@
 .vehicle-pin[data-mode="tram"] {
   background: var(--tram);
 }
+.vehicle-pin[data-mode="ferry"] {
+  background: var(--ferry);
+}
 
 .stop-pin {
   width: 10px;
@@ -265,6 +271,9 @@
 }
 .route-line.route-tram {
   stroke: var(--tram);
+}
+.route-line.route-ferry {
+  stroke: var(--ferry);
 }
 
 /* Upcoming stops of a selected vehicle, with an ETA badge above */
@@ -482,4 +491,10 @@
 /* Fallback tiles only (no CARTO key): the original OV Pulse dark filter over OpenStreetMap tiles. */
 .tiles-dark {
   filter: invert(1) hue-rotate(185deg) brightness(0.92) contrast(0.92) saturate(0.7);
+}
+
+/* TPulso offline: an Expected vehicle (position calculated from the timetable) has a dashed outline. */
+.vehicle-pin.is-expected {
+  outline: 2px dashed oklch(0.97 0.008 250 / 0.9);
+  outline-offset: 2px;
 }

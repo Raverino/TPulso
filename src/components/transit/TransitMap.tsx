@@ -16,7 +16,7 @@ import {
   type Vehicle,
 } from "@/lib/transit";
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
-import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource, type SourceState } from "@/lib/sourceStatus";
+import { countdownLabel, SOURCE_TEXT, type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES } from "@/config";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
@@ -30,18 +30,18 @@ const esc = (s: string) => s.replace(/[<>&"']/g, "");
 
 const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
-function vehicleIcon(v: Vehicle, state: "live" | "stale") {
+function vehicleIcon(v: Vehicle) {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${state}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   const icon = L.divIcon({
     className: "vehicle-marker",
     iconSize: [34, 34],
     iconAnchor: [17, 17],
-    // TPulso: source badge (Live pulsing / Stale faded) in the top-left corner.
-    html: `<div class="vehicle-pin${state === "stale" ? " is-stale" : ""}" data-mode="${v.mode}">
-        <span class="src-dot src-${state} pin-src"></span>
+    // TPulso offline: every vehicle is an Expected position from the timetable (dashed outline + badge).
+    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
+        <span class="src-dot src-expected pin-src"></span>
         <span style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
         <span>${esc(v.line)}</span>
         ${unknown ? `<span class="unknown-badge">?</span>` : ""}
@@ -267,8 +267,6 @@ export default function TransitMap({
   }, [recenterRequest]);
   const selected = selectedId ? vehicles.find((v) => v.id === selectedId) : undefined;
   const nowSec = Math.floor(now / 1000);
-  // Source state changes slowly: re-derive vehicle icons every 5 s, not every tick.
-  const bucket = Math.floor(now / 5000) * 5000;
 
   const visibleVehicles = useMemo(() => {
     if (focusStop) return vehicles.filter((v) => v.id === focusStop.vehicleId);
@@ -277,7 +275,8 @@ export default function TransitMap({
   }, [vehicles, filter, selected, focusStop]);
   const activeRoutes = useMemo(() => {
     const ids = new Set(visibleVehicles.map((v) => v.routeId));
-    return [...ids].map((id) => routes.get(id)).filter((r): r is TransitRoute => !!r);
+    // TPulso: a route can come as several slices (one per map area); `group` is the route they belong to.
+    return [...routes.values()].filter((r): r is TransitRoute => ids.has(r.group ?? r.id));
   }, [visibleVehicles, routes]);
   const visibleStops = useMemo(() => {
     // TPulso: stops are shown (the original hid them); with a vehicle selected, its own stops are drawn
@@ -396,13 +395,12 @@ export default function TransitMap({
       )}
 
       {visibleVehicles.map((v) => {
-        const src = vehicleSource({ timestamp: v.fixAt ?? 0 }, bucket);
         return (
           <Marker
             key={v.id}
             position={[v.lat, v.lng]}
-            icon={vehicleIcon(v, src.state)}
-            title={`${v.line} → ${v.headsign || "—"} · ${SOURCE_TEXT[src.state]} · last seen ${agoLabel(src.ageSec)} ago`}
+            icon={vehicleIcon(v)}
+            title={`${v.line} → ${v.headsign || "—"} · Expected position (timetable)`}
             eventHandlers={{
               click: () => onSelect(v.id),
             }}

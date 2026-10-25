@@ -108,6 +108,8 @@ export interface ExpectedVehicle {
   atStop: boolean;
   /** Index (in the full pattern) of the next stop the vehicle will reach (or is at). */
   nextStopIndex: number;
+  /** Between full-pattern stops `from` and `to`, fraction `f` of the way (by time). from === to when waiting at a stop. */
+  segment: { from: number; to: number; f: number };
 }
 
 interface Geo { pts: [number, number][]; cum: number[] }
@@ -169,7 +171,7 @@ export function expectedVehicles(manifest: Pick<Manifest, 'window'>, areas: read
             // Waiting at the very first stop of the trip before leaving is not "running".
             continue;
           }
-          let lat: number, lng: number, bearing: number, atStop = false, next = 0;
+          let lat: number, lng: number, bearing: number, atStop = false, next = 0, f = 0;
           let i = 0;
           while (i < n - 1 && t >= pr[(i + 1) * 2]!) i++; // i = last stop whose arrival has passed
           if (t <= pr[i * 2 + 1]!) {
@@ -179,7 +181,7 @@ export function expectedVehicles(manifest: Pick<Manifest, 'window'>, areas: read
             next = i;
           } else {
             const dep = pr[i * 2 + 1]!, arr = pr[(i + 1) * 2]!;
-            const f = arr > dep ? (t - dep) / (arr - dep) : 1;
+            f = arr > dep ? (t - dep) / (arr - dep) : 1;
             ({ lat, lng, bearing } = pointAlong(p, p.dist[i]! + f * (p.dist[i + 1]! - p.dist[i]!)));
             next = i + 1;
           }
@@ -191,7 +193,8 @@ export function expectedVehicles(manifest: Pick<Manifest, 'window'>, areas: read
           if (prev && (prev.interior || !interior)) continue;
           out.set(key, {
             key, patternId: p.id, tripIndex: ti, serviceDate: d.date, line: p.line, color: p.color, textColor: p.textColor,
-            mode: p.mode, op: p.op, headsign: p.headsign, lat, lng, bearing, atStop, nextStopIndex: p.first + next, interior,
+            mode: p.mode, op: p.op, headsign: p.headsign, lat, lng, bearing, atStop, nextStopIndex: p.first + next,
+            segment: atStop ? { from: p.first + i, to: p.first + i, f: 0 } : { from: p.first + i, to: p.first + i + 1, f }, interior,
           });
         }
       }

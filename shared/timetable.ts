@@ -54,7 +54,7 @@ export interface Manifest {
   operators: OperatorInfo[];
   excluded: { id: string; name: string; reason: string }[];
   area: { latDeg: number; lngDeg: number };
-  /** Area key -> file size in bytes. */
+  /** Area key -> compressed (gzip) file size in bytes. */
   areas: Record<string, number>;
 }
 

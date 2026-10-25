@@ -10,12 +10,16 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
 - Never show internal IDs to the user (e.g. `[IA9T6]199_0`). Show line number, destination, stop name.
 - Identifiers must be linked through real GTFS keys (stop_id, trip_id, route/pattern id, shape_id), not by matching text. Only approved exception: `stripNamespace()` for the two links listed in docs/DATA.md §3.
 - Real-time times and scheduled times must be visibly distinguishable.
-- Data-source display rule (every departure and every vehicle shows its source; logic in `src/lib/sourceStatus.ts`):
+- **Offline timetable version (current, docs/OFFLINE.md): two states only.** Everything is labelled as timetable data, with a visible "Timetable data, not live" note; nothing is ever shown as live.
+  - **Scheduled**: blue-grey, outline-only dot; time like "~3 min" (all times).
+  - **Expected**: a vehicle's position calculated from the timetable; dashed outline (pin and dot).
+  - Live, Estimated and Stale (below) apply only when the live feature flag (`LIVE_ENABLED` / `VITE_LIVE`) is on; it is off.
+- Data-source display rule for the live version (flag off; every departure and every vehicle shows its source; logic in `src/lib/sourceStatus.ts`):
   - **Live**: green, solid, pulsing dot; time like "3 min".
   - **Scheduled**: blue-grey, outline-only dot; time like "~3 min".
   - **Estimated**: lilac, dashed outline; time like "~3 min". Used for a selected bus's upcoming stops that have no Live/Scheduled row: computed from distance along the route and the bus's recent speed (`src/lib/eta.ts`, after the original's upcomingStopsFor/etaS).
   - **Stale**: grey, faded; text "last seen X ago".
-  - **Expected position** (later): was "dashed outline", which Estimated now uses. Pick a different look before building it.
+  - **Expected position**: dashed outline (used by the offline version). Estimated, in the live version, also uses a dashed outline but a different hue and only for stop times.
   - Delay is shown as text ("+3 min") with an arrow, never by changing the source colour.
   - Never rely on colour alone (shape, fill, motion and text must also differ). A small on-screen legend explains the states.
 - TEST mode: if the user is outside Portugal (or GPS is denied), use Marquês de Pombal (Metro) P1, Lisboa (38.725878, -9.151315; TML stop 060033) and show a clear "TEST" label in the UI. (Avenida da Liberdade was dropped: it has no TML stops within 500 m — see docs/DATA.md.)

@@ -1,13 +1,12 @@
-import { type FormEvent, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeft,
   Bus,
-  CheckCircle2,
   CircleHelp,
+  Download,
   Footprints,
   Gauge,
   MapPin,
-  MessageSquare,
   Pin,
   PinOff,
   Radio,
@@ -27,10 +26,10 @@ import {
   type UpcomingStop,
   type Vehicle,
 } from "@/lib/transit";
-import { submitFeedback } from "@/lib/feedback.functions";
 // TPulso: data-source display rule (CLAUDE.md).
 import { SourceDot } from "@/components/SourceDot";
-import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource, type SourceState } from "@/lib/sourceStatus";
+import { agoLabel, countdownLabel, SOURCE_TEXT, type SourceState } from "@/lib/sourceStatus";
+import type { OperatorInfo } from "../../../shared/timetable";
 
 const ICONS: Record<TransportMode, typeof Bus> = {
   bus: Bus,
@@ -43,7 +42,7 @@ const DOT: Record<TransportMode, string> = {
   bus: "bg-bus",
   train: "bg-train",
   tram: "bg-tram",
-  ferry: "bg-accent",
+  ferry: "bg-ferry",
 };
 
 /** TPulso: a departure's source state. Board rows older than this are Stale. */
@@ -89,9 +88,9 @@ interface Props {
   onUnpin?: () => void;
   canSelect?: (vehicleId: string) => boolean;
   openId?: string | null;
-  radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number; fixAt: number }[];
+  radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number }[];
   onOpen?: (id: string | null) => void;
-  panelView?: "results" | "help" | "feedback" | "stop";
+  panelView?: "results" | "help" | "stop";
   onPanelClose?: () => void;
   // TPulso additions
   now: number;
@@ -100,6 +99,17 @@ interface Props {
   boardStatus: { loading: boolean; error: string | null; note: string | null };
   stop?: StopPanel | null;
   routeStatus: "idle" | "loading" | "ready" | "error";
+  help: HelpInfo;
+}
+
+/** TPulso offline: what Help shows about the timetable data. */
+export interface HelpInfo {
+  window: string;
+  operators: OperatorInfo[];
+  excluded: { name: string; reason: string }[];
+  regionMB: number | null;
+  download: { state: "idle" | "running" | "done" | "error"; done: number; total: number; error?: string };
+  onDownload: () => void;
 }
 
 export interface Followed {
@@ -133,6 +143,7 @@ export default function ArrivalsDrawer({
   boardStatus,
   stop = null,
   routeStatus,
+  help,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -196,7 +207,6 @@ export default function ArrivalsDrawer({
                 {showVeh && <ul className="space-y-1">
                   {radarVehicles.map((v) => {
                     const Icon = ICONS[v.mode];
-                    const src = vehicleSource({ timestamp: v.fixAt }, now);
                     return (
                       <li
                         key={v.id}
@@ -206,7 +216,7 @@ export default function ArrivalsDrawer({
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") onSelectVehicle?.(v.id);
                         }}
-                        className={`flex cursor-pointer items-center gap-2.5 rounded-xl bg-surface-2/60 px-2.5 py-1.5 hover:bg-surface-2 ${src.state === "stale" ? "opacity-60" : ""}`}
+                        className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-surface-2/60 px-2.5 py-1.5 hover:bg-surface-2"
                       >
                         <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${DOT[v.mode]}`}>
                           <Icon className="size-3.5 text-primary-foreground" />
@@ -216,10 +226,10 @@ export default function ArrivalsDrawer({
                             <span className="font-display text-xs font-bold">{v.line}</span>{" "}
                             <span className="truncate text-xs text-foreground/80">{v.headsign || "destination not available"}</span>
                           </div>
-                          {/* TPulso: position source */}
+                          {/* TPulso: position source (timetable) */}
                           <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                            <SourceDot state={src.state} />
-                            <span className="truncate">{SOURCE_TEXT[src.state]} position · last seen {agoLabel(src.ageSec)} ago</span>
+                            <SourceDot state="expected" />
+                            <span className="truncate">Expected position (timetable)</span>
                           </div>
                         </div>
                         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{v.distanceM} m</span>
@@ -311,7 +321,7 @@ export default function ArrivalsDrawer({
                                       : <DelayText delayMin={a.delayMin} />}
                                 </div>
                               </div>
-                              {live && onPin && (
+                              {onPin && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -362,9 +372,7 @@ export default function ArrivalsDrawer({
           aria-hidden={!flipped}
         >
           {panelView === "help" ? (
-            <HelpPanel onClose={onPanelClose} />
-          ) : panelView === "feedback" ? (
-            <FeedbackPanel onClose={onPanelClose} />
+            <HelpPanel onClose={onPanelClose} info={help} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
             <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} />
           ) : back ? (
@@ -396,42 +404,75 @@ function PanelHeader({ title, icon: Icon, onClose }: { title: string; icon: type
   );
 }
 
-function HelpPanel({ onClose }: { onClose: (() => void) | undefined }) {
+function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info: HelpInfo }) {
+  const fmt = (d: string) => `${d.slice(6, 8)}/${d.slice(4, 6)}/${d.slice(0, 4)}`;
   return (
     <div className="flex h-full flex-col" onDoubleClick={onClose}>
       <PanelHeader title="How TPulso works" icon={CircleHelp} onClose={onClose} />
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 py-4 text-xs leading-relaxed [-webkit-overflow-scrolling:touch]">
-        <p className="text-foreground/85">TPulso helps you see Carris Metropolitana buses moving nearby and what leaves a stop inside your chosen circle within ten minutes.</p>
+        <p className="font-display text-sm font-bold text-primary">Timetable data, not live</p>
+        <p className="text-foreground/85">TPulso shows the public transport timetable around you: stops inside your chosen circle, what leaves them in the next ten minutes, and where each vehicle should be according to the timetable. Nothing on screen is live.</p>
 
         <HelpSection title="Symbols">
           <HelpRow icon={<Bus className="size-4" />} title="Yellow" text="Bus" tone="bg-bus" />
-          <HelpRow icon={<TrainFront className="size-4" />} title="Train, tram/metro, ferry" text="No data yet — shown in the filter but not selectable" />
+          <HelpRow icon={<TrainFront className="size-4" />} title="Blue" text="Train" tone="bg-train" />
+          <HelpRow icon={<TramFront className="size-4" />} title="Pink" text="Tram or metro" tone="bg-tram" />
+          <HelpRow icon={<Ship className="size-4" />} title="Cyan" text="Ferry" tone="bg-ferry" />
           <HelpRow icon={<MapPin className="size-4" />} title="Countdown marker" text="The stop and time remaining for an opened departure" />
           <HelpRow icon={<Pin className="size-4" />} title="Pin" text="Keep following a connection on the board" />
-          <HelpRow icon={<span className="font-display text-sm font-black">?</span>} title="Unknown route" text="The operator has no line or route data for this bus today, so its route and stops can't be shown" tone="bg-destructive" />
         </HelpSection>
 
-        {/* TPulso: data-source states (CLAUDE.md display rule) */}
-        <HelpSection title="Where each time comes from">
-          <HelpRow icon={<SourceDot state="live" />} title="Live" text="Real-time position or estimate from the operator — “3 min”" />
-          <HelpRow icon={<SourceDot state="scheduled" />} title="Scheduled" text="Timetable only — “~3 min”" />
-          <HelpRow icon={<SourceDot state="estimated" />} title="Estimated" text="Worked out by TPulso from the route and the bus’s recent speed — “~3 min”" />
-          <HelpRow icon={<SourceDot state="stale" />} title="Stale" text="Real-time data that stopped updating — “last seen … ago”" />
-          <p>Delays are written as text with an arrow, for example ▲ +3 min.</p>
+        {/* TPulso offline: the two timetable states (CLAUDE.md display rule) */}
+        <HelpSection title="What the times and vehicles mean">
+          <HelpRow icon={<SourceDot state="scheduled" />} title="Scheduled" text="A time from the timetable — “~3 min”" />
+          <HelpRow icon={<SourceDot state="expected" />} title="Expected" text="Where a vehicle should be now according to the timetable (dashed outline). Real vehicles can be early, late or cancelled." />
         </HelpSection>
 
-        <HelpSection title="What you can rely on">
-          <p><strong className="text-accent">Official live information:</strong> bus positions and real-time departure estimates from Carris Metropolitana (TML).</p>
-          <p><strong className="text-primary">Scheduled and estimated:</strong> timetable times when no live estimate exists, and TPulso’s own estimates for a bus’s later stops.</p>
-          <p>A green <strong>Live</strong> label means current data is available. A red warning means live positions are unavailable. The update time shows when the latest vehicle feed arrived.</p>
+        <HelpSection title="Timetables in this version">
+          <p>Valid {info.window}. Source: TML regional GTFS feed.</p>
+          <ul className="space-y-1">
+            {info.operators.map((o) => (
+              <li key={o.id}>
+                <strong>{o.name}</strong> · {fmt(o.dateFrom)}–{fmt(o.dateTo)}
+                {o.crossCheck.status === "mismatch" && (
+                  <span className="block text-[11px] text-destructive">
+                    Differs from the operator’s own timetable today ({o.tripsToday} vs {o.crossCheck.ownTripsToday} trips). Which one is right is not known yet.
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {info.excluded.length > 0 && (
+            <p className="text-muted-foreground">Not included: {info.excluded.map((e) => `${e.name} (${e.reason})`).join("; ")}.</p>
+          )}
+        </HelpSection>
+
+        <HelpSection title="Using TPulso offline">
+          <p>
+            Map areas you look at are saved on this device. To use TPulso without a connection anywhere in the region, save all areas now
+            {info.regionMB !== null ? ` (about ${info.regionMB.toFixed(1)} MB)` : ""}. Map backgrounds are not saved.
+          </p>
+          <button
+            onClick={info.onDownload}
+            disabled={info.download.state === "running"}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 font-display text-xs font-bold disabled:opacity-60"
+          >
+            <Download className="size-4" />
+            {info.download.state === "running"
+              ? `Saving… ${info.download.done}/${info.download.total}`
+              : info.download.state === "done"
+                ? "Whole region saved"
+                : "Save the whole region"}
+          </button>
+          {info.download.state === "error" && <p className="text-destructive">Could not save everything: {info.download.error}</p>}
         </HelpSection>
 
         <HelpSection title="Using the radar">
-          <p>Choose 100, 200, 500 or 1000 metres. Drag the map to look around; it returns to you after 20 seconds, or tap Recenter. Tap a vehicle for details, a stop for its departures, or a departure to show its stop. Tap the map to return to the live results.</p>
+          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag the map to look around; it returns to you after 20 seconds, or tap Recenter. Tap a vehicle for its route and scheduled stops, a stop for its departures, or a departure to show its stop. Tap the map to return to the results.</p>
         </HelpSection>
 
         <button onClick={onClose} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2.5 font-display text-xs font-bold text-primary-foreground">
-          <ArrowLeft className="size-4" /> Back to live results
+          <ArrowLeft className="size-4" /> Back to results
         </button>
       </div>
     </div>
@@ -444,62 +485,6 @@ function HelpSection({ title, children }: { title: string; children: React.React
 
 function HelpRow({ icon, title, text, tone = "bg-surface-2" }: { icon: React.ReactNode; title: string; text: string; tone?: string }) {
   return <div className="flex items-center gap-2.5"><span className={`grid size-7 shrink-0 place-items-center rounded-lg text-primary-foreground ${tone}`}>{icon}</span><span><strong>{title}</strong> · {text}</span></div>;
-}
-
-function FeedbackPanel({ onClose }: { onClose: (() => void) | undefined }) {
-  const [feedbackType, setFeedbackType] = useState<"issue" | "idea" | "other">("issue");
-  const [message, setMessage] = useState("");
-  const [contactEmail, setContactEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-
-  const send = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (message.trim().length < 3 || status === "sending") return;
-    setStatus("sending");
-    try {
-      await submitFeedback({ data: { feedbackType, message, contactEmail, appContext: { path: window.location.pathname, userAgent: navigator.userAgent } } });
-      setMessage("");
-      setContactEmail("");
-      setStatus("sent");
-    } catch {
-      setStatus("error");
-    }
-  };
-
-  return (
-    <div className="flex h-full flex-col">
-      <PanelHeader title="Send feedback" icon={MessageSquare} onClose={onClose} />
-      <form onSubmit={send} className="min-h-0 flex-1 touch-pan-y space-y-4 overflow-y-auto overscroll-contain px-4 py-4 [-webkit-overflow-scrolling:touch]">
-        <p className="text-xs text-muted-foreground">Tell us what went wrong or what would make TPulso more useful.</p>
-        <fieldset>
-          <legend className="mb-1.5 text-[10px] font-bold uppercase text-muted-foreground">Feedback type</legend>
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1">
-            {(["issue", "idea", "other"] as const).map((type) => (
-              <label key={type} className={`cursor-pointer rounded-md px-2 py-1.5 text-center text-xs font-semibold capitalize ${feedbackType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
-                <input type="radio" name="feedback-type" value={type} checked={feedbackType === type} onChange={() => setFeedbackType(type)} className="sr-only" />
-                {type}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <label className="block text-[10px] font-bold uppercase text-muted-foreground">Message
-          <textarea required minLength={3} maxLength={2000} value={message} onChange={(e) => { setMessage(e.target.value); setStatus("idle"); }} placeholder="What happened, or what should improve?" className="mt-1.5 min-h-32 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs font-normal normal-case text-foreground outline-none focus:border-primary" />
-        </label>
-        <label className="block text-[10px] font-bold uppercase text-muted-foreground">Email <span className="font-normal normal-case">(optional)</span>
-          <input type="email" maxLength={254} value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="you@example.com" className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-xs font-normal normal-case text-foreground outline-none focus:border-primary" />
-        </label>
-        {status === "sent" && <p className="flex items-center gap-1.5 text-xs font-semibold text-accent"><CheckCircle2 className="size-4" /> Thank you. Your feedback was sent.</p>}
-        {/* TPulso: feedback storage is not configured yet (no database in the MVP) — say so. */}
-        {status === "error" && <p className="text-xs font-semibold text-destructive">Feedback could not be sent: sending feedback is not set up yet in this version of TPulso.</p>}
-        <button type="submit" disabled={message.trim().length < 3 || status === "sending"} className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2.5 font-display text-xs font-bold text-primary-foreground disabled:opacity-50">
-          <MessageSquare className="size-4" /> {status === "sending" ? "Sending…" : "Send feedback"}
-        </button>
-        <button type="button" onClick={onClose} className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2.5 font-display text-xs font-bold">
-          <ArrowLeft className="size-4" /> Back to live results
-        </button>
-      </form>
-    </div>
-  );
 }
 
 function VehicleDetails({
@@ -520,17 +505,6 @@ function VehicleDetails({
   routeStatus: Props["routeStatus"];
 }) {
   const Icon = ICONS[v.mode];
-  // TPulso: punctuality is only known when the board has this trip with a live estimate.
-  const known = Number.isFinite(v.punctualityMin);
-  const delay =
-    !known
-      ? "Not known"
-      : v.punctualityMin > 0.05
-        ? `▲ ${v.punctualityMin.toFixed(0)} min late`
-        : v.punctualityMin < -0.05
-          ? `▼ ${Math.abs(v.punctualityMin).toFixed(0)} min early`
-          : "On time";
-  const src = vehicleSource({ timestamp: v.fixAt ?? 0 }, now);
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
@@ -554,7 +528,7 @@ function VehicleDetails({
           </div>
           <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
             {(r?.operator || v.operator) ?? ""} · {MODE_LABEL[v.mode]} ·{" "}
-            <SourceDot state={src.state} /> {SOURCE_TEXT[src.state]} position, {agoLabel(src.ageSec)} ago
+            <SourceDot state="expected" /> Expected position (timetable)
           </div>
         </div>
       </div>
@@ -570,21 +544,19 @@ function VehicleDetails({
       <div className="grid grid-cols-2 gap-2 px-3 pb-3">
         <div className="rounded-xl bg-surface-2/70 px-3 py-2">
           <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-            <Gauge className="size-3" /> Speed
+            <Gauge className="size-3" /> Position
           </div>
-          <div className="font-display text-sm font-bold">
-            {Number.isFinite(v.speedKmh) ? `${Math.round(v.speedKmh)} km/h` : <span className="text-muted-foreground">Not known</span>}
+          <div className="flex items-center gap-1.5 font-display text-sm font-bold">
+            <SourceDot state="expected" /> Expected
           </div>
+          <div className="text-[10px] text-muted-foreground">calculated from the timetable</div>
         </div>
         <div className="rounded-xl bg-surface-2/70 px-3 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            Punctuality
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Times</div>
+          <div className="flex items-center gap-1.5 font-display text-sm font-bold">
+            <SourceDot state="scheduled" /> Scheduled
           </div>
-          <div
-            className={`font-display text-sm font-bold ${!known ? "text-muted-foreground" : v.punctualityMin > 0.05 ? "text-destructive" : "text-accent"}`}
-          >
-            {delay}
-          </div>
+          <div className="text-[10px] text-muted-foreground">not live: delays are not known</div>
         </div>
       </div>
 

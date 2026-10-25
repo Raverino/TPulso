@@ -130,6 +130,8 @@ export interface TransitRoute {
   stops?: { name: string; lat: number; lng: number }[];
   /** cumulative metres along path */
   cum: number[];
+  /** TPulso offline: the route this slice belongs to (several slices per route, one per map area). */
+  group?: string;
 }
 
 export function prepareRoute(r: Omit<TransitRoute, 'cum'>): TransitRoute {

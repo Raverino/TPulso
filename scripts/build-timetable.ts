@@ -97,7 +97,8 @@ async function main() {
   const areaSizes: Record<string, number> = {};
   for (const [k, a] of res.areas) {
     const json = JSON.stringify(a);
-    areaSizes[k] = json.length;
+    // Compressed size: what a phone actually downloads (shown in Help for "save the whole region").
+    areaSizes[k] = zlib.gzipSync(json).length;
     files.push({ rel: `areas/${k}.json`, json });
     if (json.length > 2_000_000) problems.push(`area ${k} is ${mb(json.length)} (limit 2 MB)`);
   }
