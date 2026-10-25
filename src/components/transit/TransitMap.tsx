@@ -1,36 +1,50 @@
-// Ported from the original OV Pulse TransitMap.tsx: radar circle, sonar bezel, snap-back
-// recentre, dark tiles, vehicle pins, upcoming-stop and countdown markers, clipped route line.
-// Changes: TML data, the Live/Stale source badge on every vehicle, stops inside the radar shown.
-import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LocateFixed } from 'lucide-react';
-import L from 'leaflet';
-import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
+import type React from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
+import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { LocateFixed } from "lucide-react";
+import "leaflet/dist/leaflet.css";
 
-import type { StopLite, Vehicle } from '../../../shared/types';
-import { MAP_TILES } from '@/config';
-import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource, type SourceState } from '@/lib/sourceStatus';
-import { clipPath, type LatLng, type UpcomingStop } from '@/lib/transit';
+import {
+  clipRoute,
+  isUnknownRoute,
+  type TransitRoute,
+  type FilterMode,
+  type LatLng,
+  type Stop,
+  type UpcomingStop,
+  type Vehicle,
+} from "@/lib/transit";
+// TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
+import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource, type SourceState } from "@/lib/sourceStatus";
+import { MAP_TILES } from "@/config";
 
-const esc = (s: string) => s.replace(/[<>&"']/g, '');
+const MODE_GLYPH: Record<Vehicle["mode"], string> = {
+  bus: "BUS",
+  train: "CP",
+  tram: "TRM",
+  ferry: "FRY",
+};
+
+const esc = (s: string) => s.replace(/[<>&"']/g, "");
 
 const iconCache = new Map<string, L.DivIcon>();
-/** Cached so markers keep their DOM element (lets the CSS glide run between updates). */
-function vehicleIcon(v: Vehicle, state: 'live' | 'stale') {
-  const unknown = v.line === null;
-  const key = `${v.line}|${state}`;
+/** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
+function vehicleIcon(v: Vehicle, state: "live" | "stale") {
+  const unknown = isUnknownRoute(v);
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${state}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   const icon = L.divIcon({
-    className: 'vehicle-marker',
+    className: "vehicle-marker",
     iconSize: [34, 34],
     iconAnchor: [17, 17],
-    html: `<div class="vehicle-pin${state === 'stale' ? ' is-stale' : ''}" data-mode="bus">
+    // TPulso: source badge (Live pulsing / Stale faded) in the top-left corner.
+    html: `<div class="vehicle-pin${state === "stale" ? " is-stale" : ""}" data-mode="${v.mode}">
         <span class="src-dot src-${state} pin-src"></span>
-        <span style="font-size:8px;opacity:.7">BUS</span>
-        <span>${unknown ? '?' : esc(v.line!)}</span>
-        ${unknown ? `<span class="unknown-badge">?</span>` : ''}
+        <span style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
+        <span>${esc(v.line)}</span>
+        ${unknown ? `<span class="unknown-badge">?</span>` : ""}
       </div>`,
   });
   iconCache.set(key, icon);
@@ -45,53 +59,55 @@ function GlideGuard() {
     let t: ReturnType<typeof setTimeout>;
     const off = () => {
       clearTimeout(t);
-      el.classList.add('no-glide');
+      el.classList.add("no-glide");
     };
     const on = () => {
       clearTimeout(t);
-      t = setTimeout(() => el.classList.remove('no-glide'), 80);
+      t = setTimeout(() => el.classList.remove("no-glide"), 80);
     };
-    map.on('zoomstart movestart viewreset', off);
-    map.on('zoomend moveend', on);
+    map.on("zoomstart movestart viewreset", off);
+    map.on("zoomend moveend", on);
     return () => {
-      map.off('zoomstart movestart viewreset', off);
-      map.off('zoomend moveend', on);
+      map.off("zoomstart movestart viewreset", off);
+      map.off("zoomend moveend", on);
     };
   }, [map]);
   return null;
 }
 
 const stopIcon = L.divIcon({
-  className: '',
+  className: "",
   iconSize: [10, 10],
   iconAnchor: [5, 5],
-  html: `<div class="stop-pin in-radar"></div>`,
+  html: `<div class="stop-pin"></div>`,
 });
 
-function upcomingIcon(name: string, label: string | null, state?: SourceState) {
-  const dot = state ? `<span class="src-dot src-${state} eta-src"></span>` : '';
+// TPulso: the ETA badge carries the stop time's source dot (Live / Scheduled / Estimated).
+function upcomingIcon(etaLabelText: string, name: string, state?: SourceState) {
+  const safe = esc(name);
+  const dot = state ? `<span class="src-dot src-${state} eta-src"></span>` : "";
   return L.divIcon({
-    className: '',
+    className: "",
     iconSize: [12, 12],
     iconAnchor: [6, 6],
-    html: `<div class="upcoming-stop" title="${esc(name)}">${label ? `<span class="upcoming-eta lift">${dot}${esc(label)}</span>` : ''}</div>`,
+    html: `<div class="upcoming-stop" title="${safe}"><span class="upcoming-eta lift">${dot}${esc(etaLabelText)}</span></div>`,
   });
 }
 
 const locateIcon = L.divIcon({
-  className: '',
+  className: "",
   iconSize: [18, 18],
   iconAnchor: [9, 9],
   html: `<div class="locate-dot"></div>`,
 });
 
-/** After this long without touching the map, it glides back to your position. */
+/** TPulso: after this long without touching the map, it glides back to your position. */
 export const RECENTER_IDLE_MS = 20_000;
 
 /**
- * Keeps the radar circle fitted in view. The radar is drawn in map coordinates, so when you drag the
- * map it moves with it and you can explore around. While you are exploring, position updates don't
- * pull the view back; after RECENTER_IDLE_MS without interaction (or on `recenterSignal`) it glides home.
+ * Fits the radar circle in view. TPulso change: the radar is drawn in map coordinates, so dragging moves
+ * it with the map (explore around) instead of the original's snap-back after 0.4 s. Position updates don't
+ * pull the view back while exploring; it glides home after RECENTER_IDLE_MS idle or on `recenterSignal`.
  */
 function Recenter({
   center,
@@ -127,12 +143,10 @@ function Recenter({
     else map.fitBounds(bounds, { padding: [28, 28], animate: true });
   };
 
-  // New position or radius: follow it, unless the user is exploring elsewhere.
   useEffect(() => {
     if (!away.current) homeRef.current(false);
   }, [center.lat, center.lng, radius]);
 
-  // Recenter button.
   useEffect(() => {
     if (recenterSignal > 0) homeRef.current(true);
   }, [recenterSignal]);
@@ -147,11 +161,10 @@ function Recenter({
       setAway(true);
       touched();
     };
-    map.on('dragstart', dragged);
-    // Any touch/mouse/pen interaction restarts the idle countdown while exploring.
+    map.on("dragstart", dragged);
     const onPointer = () => away.current && touched();
-    el.addEventListener('pointerdown', onPointer);
-    el.addEventListener('pointermove', onPointer, { passive: true });
+    el.addEventListener("pointerdown", onPointer);
+    el.addEventListener("pointermove", onPointer, { passive: true });
     const ro = new ResizeObserver(() => {
       map.invalidateSize();
       if (!away.current) homeRef.current(false);
@@ -159,38 +172,35 @@ function Recenter({
     ro.observe(el);
     return () => {
       clearTimeout(idle.current);
-      map.off('dragstart', dragged);
-      el.removeEventListener('pointerdown', onPointer);
-      el.removeEventListener('pointermove', onPointer);
+      map.off("dragstart", dragged);
+      el.removeEventListener("pointerdown", onPointer);
+      el.removeEventListener("pointermove", onPointer);
       ro.disconnect();
     };
   }, [map, setAway]);
   return null;
 }
 
-export interface FocusStop {
-  lat: number;
-  lng: number;
-  name: string;
-  label: string;
-  vehicleId: string | null;
-}
-
 interface Props {
   center: LatLng;
-  isTest: boolean;
+  hasGps: boolean;
   radius: number;
+  filter: FilterMode;
   vehicles: Vehicle[];
-  stops: (StopLite & { distance: number })[];
+  routes: Map<string, TransitRoute>;
+  stops: Stop[];
   selectedId: string | null;
-  /** Route geometry of the selected vehicle ([lat, lng]); empty when not available. */
-  selectedPath: [number, number][];
-  upcoming: UpcomingStop[];
   onSelect: (id: string | null) => void;
-  focusStop?: FocusStop | null;
-  selectedStopId: string | null;
+  focusStop?: { lat: number; lng: number; name: string; label: string; vehicleId: string | null } | null;
+  /** Live feed refresh in progress: show a charging sweep on the radar. */
+  loading?: boolean;
+  // TPulso additions
+  /** Upcoming stops of the selected vehicle with their expected times (Live / Scheduled / Estimated). */
+  upcoming: UpcomingStop[];
+  /** Tapping a stop opens its departures. */
   onSelectStop: (id: string) => void;
-  /** Incremented by the header's recentre button. */
+  selectedStopId: string | null;
+  /** Incremented by the top bar's recentre button. */
   recenterRequest: number;
   now: number;
 }
@@ -198,9 +208,9 @@ interface Props {
 function ClearOnMapClick({ onClear }: { onClear: () => void }) {
   const map = useMap();
   useEffect(() => {
-    map.on('click', onClear);
+    map.on("click", onClear);
     return () => {
-      map.off('click', onClear);
+      map.off("click", onClear);
     };
   }, [map, onClear]);
   return null;
@@ -224,9 +234,9 @@ function SonarGeometry({
       onChange({ x: p.x, y: p.y, r: Math.abs(p.y - edge.y) });
     };
     update();
-    map.on('move zoom resize viewreset', update);
+    map.on("move zoom resize viewreset", update);
     return () => {
-      map.off('move zoom resize viewreset', update);
+      map.off("move zoom resize viewreset", update);
     };
   }, [map, center.lat, center.lng, radius, onChange]);
   return null;
@@ -234,17 +244,18 @@ function SonarGeometry({
 
 export default function TransitMap({
   center,
-  isTest,
+  hasGps,
   radius,
+  filter,
   vehicles,
+  routes,
   stops,
   selectedId,
-  selectedPath,
-  upcoming,
   onSelect,
   focusStop,
-  selectedStopId,
+  upcoming,
   onSelectStop,
+  selectedStopId,
   recenterRequest,
   now,
 }: Props) {
@@ -252,23 +263,28 @@ export default function TransitMap({
   const [away, setAway] = useState(false);
   const [recenterSignal, setRecenterSignal] = useState(0);
   useEffect(() => {
-    if (recenterRequest > 0) setRecenterSignal(n => n + 1);
+    if (recenterRequest > 0) setRecenterSignal((n) => n + 1);
   }, [recenterRequest]);
-  const selected = selectedId ? vehicles.find(v => v.id === selectedId) : undefined;
+  const selected = selectedId ? vehicles.find((v) => v.id === selectedId) : undefined;
   const nowSec = Math.floor(now / 1000);
-  // Source state changes slowly; re-derive icons every 5 s rather than every tick.
+  // Source state changes slowly: re-derive vehicle icons every 5 s, not every tick.
   const bucket = Math.floor(now / 5000) * 5000;
 
   const visibleVehicles = useMemo(() => {
-    if (focusStop) return vehicles.filter(v => v.id === focusStop.vehicleId);
+    if (focusStop) return vehicles.filter((v) => v.id === focusStop.vehicleId);
     if (selected) return [selected];
-    return vehicles;
-  }, [vehicles, selected, focusStop]);
-  const routeSegments = useMemo(
-    () => (selected && !focusStop ? clipPath(selectedPath, center, radius) : []),
-    [selected, focusStop, selectedPath, center, radius],
-  );
-  const selectedStopIds = useMemo(() => new Set(upcoming.map(u => u.stopId)), [upcoming]);
+    return filter === "all" ? vehicles : vehicles.filter((v) => v.mode === filter);
+  }, [vehicles, filter, selected, focusStop]);
+  const activeRoutes = useMemo(() => {
+    const ids = new Set(visibleVehicles.map((v) => v.routeId));
+    return [...ids].map((id) => routes.get(id)).filter((r): r is TransitRoute => !!r);
+  }, [visibleVehicles, routes]);
+  const visibleStops = useMemo(() => {
+    // TPulso: stops are shown (the original hid them); with a vehicle selected, its own stops are drawn
+    // as upcoming-stop markers instead.
+    if (selected || focusStop) return [];
+    return filter === "all" ? stops : stops.filter((s) => s.mode === filter);
+  }, [stops, filter, selected, focusStop]);
   // Keep the station marker on the radar: clamp to the rim when it lies outside.
   const focusPos = useMemo((): [number, number] | null => {
     if (!focusStop) return null;
@@ -286,124 +302,123 @@ export default function TransitMap({
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer
-        zoomSnap={0}
+    <MapContainer
+      zoomSnap={0}
+      center={[center.lat, center.lng]}
+      zoom={16}
+      zoomControl={false}
+      scrollWheelZoom={false}
+      doubleClickZoom={false}
+      touchZoom={false}
+      boxZoom={false}
+      keyboard={false}
+      // TPulso: Leaflet's default fling speed is unlimited; a quick flick could throw the radar off-screen.
+      inertiaMaxSpeed={1200}
+      inertiaDeceleration={4000}
+      attributionControl
+      className="h-full w-full"
+    >
+      {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
+      <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} />
+      <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
+      <GlideGuard />
+      <ClearOnMapClick onClear={clear} />
+
+
+      <Circle
         center={[center.lat, center.lng]}
-        zoom={16}
-        zoomControl={false}
-        scrollWheelZoom={false}
-        doubleClickZoom={false}
-        touchZoom={false}
-        boxZoom={false}
-        keyboard={false}
-        // Leaflet's default fling speed is unlimited: a quick flick could throw the radar far off-screen.
-        inertiaMaxSpeed={1200}
-        inertiaDeceleration={4000}
-        attributionControl
-        className="h-full w-full"
-      >
-        <TileLayer
-          url={MAP_TILES.url}
-          attribution={MAP_TILES.attribution}
-          maxZoom={MAP_TILES.maxZoom}
-        />
-        <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
-        <GlideGuard />
-        <ClearOnMapClick onClear={clear} />
+        radius={radius}
+        className="radar-ring"
+        pathOptions={{
+          color: "oklch(0.68 0.19 258)",
+          weight: 1.5,
+          fillColor: "oklch(0.68 0.19 258)",
+          fillOpacity: 0.12,
+          dashArray: "6 6",
+        }}
+      />
 
-        <Circle
-          center={[center.lat, center.lng]}
-          radius={radius}
-          className="radar-ring"
-          pathOptions={{
-            color: 'oklch(0.68 0.19 258)',
-            weight: 1.5,
-            fillColor: 'oklch(0.68 0.19 258)',
-            fillOpacity: 0.12,
-            dashArray: '6 6',
-          }}
-        />
+      <Marker position={[center.lat, center.lng]} icon={locateIcon} zIndexOffset={1000}>
+        <Popup>
+          <strong className="font-display">{hasGps ? "You are here" : "TEST location"}</strong>
+          <div className="text-muted-foreground">
+            {hasGps ? `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}` : "Not your real position"}
+          </div>
+        </Popup>
+      </Marker>
 
-        <Marker position={[center.lat, center.lng]} icon={locateIcon} zIndexOffset={1000}>
+      {upcomingStops.map((u) => (
+        <Marker
+          key={u.key}
+          position={[u.lat, u.lng]}
+          icon={upcomingIcon(countdownLabel(nowSec + u.etaS, nowSec, u.state), u.name, u.state)}
+          zIndexOffset={500}
+        >
           <Popup>
-            <strong className="font-display">{isTest ? 'TEST location' : 'You are here'}</strong>
+            <strong className="font-display">{u.name}</strong>
             <div className="text-muted-foreground">
-              {isTest ? 'Not your real position' : `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`}
+              {u.aheadM} m ahead · {SOURCE_TEXT[u.state]} {countdownLabel(nowSec + u.etaS, nowSec, u.state)}
             </div>
           </Popup>
         </Marker>
+      ))}
 
-        {!focusStop &&
-          stops
-            .filter(s => !selectedStopIds.has(s.id))
-            .map(s => (
-              <Marker
-                key={s.id}
-                position={[s.lat, s.lng]}
-                icon={s.id === selectedStopId ? upcomingIcon(s.name, s.name) : stopIcon}
-                title={`${s.name} · ${Math.round(s.distance)} m`}
-                zIndexOffset={s.id === selectedStopId ? 800 : 0}
-                eventHandlers={{ click: () => onSelectStop(s.id) }}
-              />
-            ))}
+      {focusStop && focusPos && (
+        <Marker
+          position={focusPos}
+          icon={upcomingIcon(focusStop.label, focusStop.name)}
+          zIndexOffset={900}
+          eventHandlers={{ click: clear }}
+        />
+      )}
 
-        {upcomingStops.map(u => (
-          <Marker
-            key={u.key}
-            position={[u.lat, u.lng]}
-            icon={upcomingIcon(u.name, countdownLabel(u.atSec, nowSec, u.state), u.state)}
-            zIndexOffset={500}
-          >
-            <Popup>
-              <strong className="font-display">{u.name}</strong>
-              <div className="text-muted-foreground">
-                {SOURCE_TEXT[u.state]} · {countdownLabel(u.atSec, nowSec, u.state)}
-              </div>
-            </Popup>
-          </Marker>
-        ))}
+      {visibleStops.map((s) => (
+        <Marker
+          key={s.id}
+          position={[s.lat, s.lng]}
+          icon={s.id === selectedStopId ? upcomingIcon(s.name, s.name) : stopIcon}
+          title={s.name}
+          zIndexOffset={s.id === selectedStopId ? 800 : 0}
+          eventHandlers={{ click: () => onSelectStop(s.id) }}
+        />
+      ))}
 
-        {focusStop && focusPos && (
-          <Marker
-            position={focusPos}
-            icon={upcomingIcon(focusStop.name, focusStop.label)}
-            zIndexOffset={900}
-            eventHandlers={{ click: clear }}
-          />
-        )}
-
-        {routeSegments.map((seg, i) => (
+      {activeRoutes.map((r) =>
+        clipRoute(r, center, radius).map((seg, i) => (
           <Polyline
-            key={`route-${selectedId}-${i}-${radius}`}
+            key={`route-${r.id}-${i}-${radius}`}
             positions={seg}
-            className="route-line route-bus"
-            pathOptions={{ weight: 3, opacity: 0.6, color: 'currentColor' }}
+            className={`route-line route-${r.mode}`}
+            pathOptions={{ weight: 3, opacity: 0.6, color: "currentColor" }}
             interactive={false}
           />
-        ))}
+        )),
+      )}
 
-        {visibleVehicles.map(v => {
-          const src = vehicleSource(v, bucket);
-          return (
-            <Marker
-              key={v.id}
-              position={[v.lat, v.lng]}
-              icon={vehicleIcon(v, src.state)}
-              title={`${v.line ?? '?'} → ${v.headsign ?? 'destination unknown'} · ${SOURCE_TEXT[src.state]} · last seen ${agoLabel(src.ageSec)} ago`}
-              zIndexOffset={src.state === 'live' ? 600 : 0}
-              eventHandlers={{
-                click: () => onSelect(v.id),
-              }}
-            />
-          );
-        })}
-        <SonarGeometry center={center} radius={radius} onChange={setGeo} />
-      </MapContainer>
+      {visibleVehicles.map((v) => {
+        const src = vehicleSource({ timestamp: v.fixAt ?? 0 }, bucket);
+        return (
+          <Marker
+            key={v.id}
+            position={[v.lat, v.lng]}
+            icon={vehicleIcon(v, src.state)}
+            title={`${v.line} → ${v.headsign || "—"} · ${SOURCE_TEXT[src.state]} · last seen ${agoLabel(src.ageSec)} ago`}
+            eventHandlers={{
+              click: () => onSelect(v.id),
+            }}
+          >
+
+          </Marker>
+        );
+      })}
+      <SonarGeometry center={center} radius={radius} onChange={setGeo} />
+    </MapContainer>
       <div
         className="sonar-bezel"
-        style={{ '--x': `${geo.x}px`, '--y': `${geo.y}px`, '--r': `${geo.r}px` } as React.CSSProperties}
+        style={{ "--x": `${geo.x}px`, "--y": `${geo.y}px`, "--r": `${geo.r}px` } as React.CSSProperties}
         aria-hidden
       />
+      {/* TPulso additions: missing tile key notice and the Recenter button while exploring. */}
       {MAP_TILES.problem && (
         <p className="pointer-events-none absolute left-1/2 top-2 z-[480] -translate-x-1/2 rounded-lg bg-surface/90 px-2 py-1 text-center text-[10px] text-muted-foreground">
           {MAP_TILES.problem}
@@ -412,7 +427,7 @@ export default function TransitMap({
       {away && (
         <button
           type="button"
-          onClick={() => setRecenterSignal(n => n + 1)}
+          onClick={() => setRecenterSignal((n) => n + 1)}
           className="absolute bottom-6 right-3 z-[480] flex items-center gap-1.5 rounded-xl border border-border bg-surface/95 px-3 py-2 font-display text-xs font-bold text-primary shadow-float active:scale-95"
           aria-label="Recenter the radar on your position"
         >

@@ -27,6 +27,8 @@ export interface RouteStop extends LatLng {
 
 export interface StopEta extends RouteStop {
   state: StopTimeState;
+  /** Metres ahead of the bus along the route (straight-line x1.25 without geometry). */
+  aheadM: number;
   /** Unix seconds. */
   atSec: number;
 }
@@ -64,9 +66,14 @@ export function nearestIndex(path: readonly [number, number][], p: LatLng, fromI
 
 /**
  * Recent speed in m/s from the bus's last GPS fixes (distance along the route when known),
- * clamped to 8–80 km/h as in the original. Null when there aren't two usable fixes.
+ * clamped to 8–80 km/h as in the original (pass clamp=false for the measured value). Null when there aren't two usable fixes.
  */
-export function recentSpeedMps(fixes: readonly Fix[], path: readonly [number, number][], cum?: number[]): number | null {
+export function recentSpeedMps(
+  fixes: readonly Fix[],
+  path: readonly [number, number][],
+  cum?: number[],
+  clamp = true,
+): number | null {
   const recent = fixes.filter(f => fixes[fixes.length - 1]!.t - f.t <= 120_000);
   const first = recent[0];
   const last = recent[recent.length - 1];
@@ -77,7 +84,8 @@ export function recentSpeedMps(fixes: readonly Fix[], path: readonly [number, nu
     moved = Math.abs(c[nearestIndex(path, last)]! - c[nearestIndex(path, first)]!);
   } else moved = distanceMeters(first, last);
   if (moved < 8) return null; // standing still or GPS jitter: don't pretend to know a speed
-  const kmh = Math.min(80, Math.max(8, (moved / ((last.t - first.t) / 1000)) * 3.6));
+  const raw = (moved / ((last.t - first.t) / 1000)) * 3.6;
+  const kmh = clamp ? Math.min(80, Math.max(8, raw)) : raw;
   return kmh / 3.6;
 }
 
@@ -126,11 +134,11 @@ export function buildStopEtas({ stops, path, vehicle, nowSec, speedMps, times }:
       const live = row.estimatedAt !== null;
       const atSec = live ? row.estimatedAt! : row.scheduledAt;
       anchor = { s: pos[i]!, t: atSec, index: i };
-      return { ...st, state: live ? 'live' : 'scheduled', atSec };
+      return { ...st, state: live ? 'live' : 'scheduled', atSec, aheadM: Math.round(Math.max(0, pos[i]! - s0)) };
     }
     // Stops passed since the anchor each add a dwell (the anchor stop's own dwell included).
     const dwellStops = anchor.index < 0 ? i : i - anchor.index;
     const atSec = Math.round(anchor.t + Math.max(0, pos[i]! - anchor.s) / speed + dwellStops * DWELL_SEC);
-    return { ...st, state: 'estimated', atSec };
+    return { ...st, state: 'estimated', atSec, aheadM: Math.round(Math.max(0, pos[i]! - s0)) };
   });
 }

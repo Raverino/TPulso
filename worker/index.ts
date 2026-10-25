@@ -64,6 +64,11 @@ export async function handleApi(url: URL, p: TransitProvider, now: Date): Promis
 export default {
   async fetch(request: Request, _env: unknown, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // Feedback panel (ported from the original): no storage is configured in the MVP (no database),
+    // so say so honestly instead of pretending it was sent.
+    if (url.pathname === '/api/feedback') {
+      return request.method === 'POST' ? error(503, 'feedback_not_configured') : error(405, 'method_not_allowed');
+    }
     if (request.method !== 'GET') return error(405, 'method_not_allowed');
 
     // The stop list is built from a 6.8 MB upstream file: keep the finished response in the edge cache.
