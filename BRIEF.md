@@ -4,8 +4,8 @@
 A working mobile MVP for Lisbon (Carris Metropolitana / TML buses) within one week of starting (target around Mon 2026-11-02).
 
 ## In scope (MVP)
-- User position via GPS; fallback to the TEST location (see CLAUDE.md), clearly labelled.
-- Radius selector: 100 / 200 / 500 m.
+- User position via GPS; fallback to the TEST location — Marquês de Pombal (Metro) P1, 38.725878, -9.151315 (see CLAUDE.md) — with a clear "TEST" label.
+- Radius selector: 100 / 200 / 500 / 1000 m.
 - Stops inside the radius, shown on a map.
 - Departures per stop, with real-time vs scheduled clearly marked, and countdowns.
 - Live buses on the map (positions from TML real-time data).

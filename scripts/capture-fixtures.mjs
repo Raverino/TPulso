@@ -2,7 +2,7 @@
 // Usage: node scripts/capture-fixtures.mjs fixtures   (GTFS extracts in fixtures/gtfs were cut by hand from /v2/gtfs)
 import fs from 'node:fs';
 const OUT=process.argv[2], B='https://api.carrismetropolitana.pt/v2';
-const T={lat:38.72079702815775,lon:-9.146010904277587};
+const T={lat:38.725878,lon:-9.151315}; // TEST point: Marquês de Pombal (Metro) P1
 const hav=(a,b,c,d)=>{const R=6371000,t=x=>x*Math.PI/180;const h=Math.sin(t(c-a)/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(t(d-b)/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
 const meta={captured_at:new Date().toISOString(),source:B,files:{}};
 async function get(path,file,transform){const url=B+path;const r=await fetch(url);const ct=r.headers.get('content-type')||'';

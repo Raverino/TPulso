@@ -69,18 +69,20 @@ vehicle ── vehicle.stop_id ══ exact ══ /stops.id   (357/367; rest "U
 ## 5. Rules for the provider (TML implementation)
 
 1. Use the **v2 JSON API as the single source.** Do not mix in GTFS-zip IDs at runtime (different stop numbers and plans, see below).
-2. Keep **one** tested function, `stripNamespace(id)`, that removes leading `[XXXXX]` groups. Use it only for the two missing links in §3, never on names. *(Needs owner approval, see "Mismatches" #4.)*
-3. `stopsNear` cannot query by location. The 6.8 MB `/stops` list must be cached and filtered server-side (Cloudflare Worker cache, 1 h) and never downloaded by the phone.
+2. Keep **one** tested function, `stripNamespace(id)`, that removes leading `[XXXXX]` groups. Use it only for the two missing links in §3, never on names. *(Approved by the owner 2026-10-25.)*
+3. `stopsNear`: the API cannot query by location. Our server fetches the 6.8 MB `/stops` list and serves a **trimmed, compressed list** (`id`, `name`, `lat`, `lng` only; stops without any line left out). The phone caches it (IndexedDB), refreshes it about once a day, and filters by radius locally. The phone never downloads the raw `/stops` list or the 78 MB GTFS zip.
+6. Departures from `/arrivals/by_stop` can include **city Carris** lines (agency `IA9T6`, e.g. lines 702, 711, 748 at stop 060035). They are not in `/lines` and are out of scope: departures whose line is not in `/lines` are left out.
 4. Ignore `vehicle.stop_id === "UNAVAILABLE_STOP_ID"`. The capacity fields are 0 and make/model are null: do not show them.
 5. Vehicle ID `[AGENCY]number` is stable and unique (0 duplicates). Keep it as the internal vehicle key for the later share feature.
 
 ## 6. Mismatches with BRIEF.md / CLAUDE.md
 
-1. **The TEST location has no TML stops.** 0 stops within 100/200/500 m of Avenida da Liberdade. The nearest are the Marquês de Pombal (Metro) P1–P6 stops, 729–790 m away. Avenida da Liberdade is served by Carris (city) and the Metro, both out of scope. In TEST mode the radar would always be empty. → Choose a new TEST point, e.g. Marquês de Pombal P1 (38.725878, -9.151315), which has 4 TML stops within 100 m, 6 within 200 m and 7 within 500 m.
+1. **Avenida da Liberdade has no TML stops.** 0 stops within 100/200/500 m of the original TEST point (38.72079702815775, -9.146010904277587). The nearest are the Marquês de Pombal (Metro) P1–P6 stops, 729–790 m away. Avenida da Liberdade is served by Carris (city) and the Metro, both out of scope. **Resolved 2026-10-25:** the TEST point is now Marquês de Pombal (Metro) P1 (38.725878, -9.151315), which has 4 served TML stops within 100 m, 6 within 200 m, 7 within 500 m and 11 within 1000 m. (`fixtures/stops.near-test-1500m.json` was captured around the old point; it still contains P1–P6.)
 2. **Docs site no longer exists.** `docs.carrismetropolitana.pt` → redirect. Reference = API source on GitHub.
 3. **No GTFS-Realtime TripUpdates.** Only VehiclePositions (`/vehicles.pb`). Real-time departures come from the JSON `arrivals/by_stop`, which gives estimates only (no observed times).
-4. **IDs are not plain GTFS keys** and differ per endpoint (§2). Two links in the MVP (arrival → line name, vehicle → shape) need prefix-stripping. This conflicts with "link by real GTFS keys, not by matching text". The only fully exact alternative is to preprocess the 78 MB GTFS zip (trip_id → shape_id), which goes against "no database / small MVP".
+4. **IDs are not plain GTFS keys** and differ per endpoint (§2). Two links in the MVP (arrival → line name, vehicle → shape) need prefix-stripping. **Resolved 2026-10-25:** `stripNamespace()` approved for exactly these two links. In the fixtures, 365 of 367 vehicles resolve to a pattern; the other 2 (lines 4606, 2527) are missing from `/lines` entirely, so they get no route line (honest "not available").
 5. **The GTFS zip and the API are out of sync.** The zip (feed 20261024) has renumbered ~5 050 stops (`060033` → `360033`, with the old ID in `legacy_ids`) and uses newer plans (`KMMRZ`, `PL3CL`, …). The API and the live data still use the old stop IDs and older plans in `/patterns`.
 6. **Real-time is partial** (~47 % of near-term departures in the sample). The UI must treat scheduled-only as normal.
-7. **No geo query for stops.** Radar filtering needs the full 6.8 MB list cached on the server.
+7. **No geo query for stops.** Solved with a trimmed stop list from our server, cached on the phone (§5 rule 3).
+9. **City Carris shows up in TML departures** (§5 rule 6). Filtered out for the MVP.
 8. **No documented rate limit and no key.** Easier than assumed, but no guarantees.
