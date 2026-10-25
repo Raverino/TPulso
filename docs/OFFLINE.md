@@ -126,3 +126,13 @@ Continue the faithful port of reference/ovpulse:
 3. **Window and area size.** Are 14 days and ~2.2 km areas OK?
 4. **Hosting the nightly update.** GitHub Actions + a Cloudflare API token as a secret (you'd create the token), or manual rebuilds for now?
 5. **MTS** stays out until a current feed exists. Is that OK?
+
+## 10. Build results (first real run, 2026-10-25)
+
+Command: `npm run timetable` (add `--offline` to reuse downloaded feeds). Run on this PC: **121 s, peak memory 1.1 GB** (GitHub Actions runners have 7 GB, so moving it there is fine). Output: 3 591 files, 37 MB raw / **12.1 MB gzip** (areas 5.6 MB: median 2 kB, 90 % ≤ 16 kB, max 113 kB; route files 6.4 MB, loaded on demand).
+
+Cross-check (trips today, regional feed vs operator's own feed): CP 856 vs 821 (4 %), Fertagus 104 = 104, Carris 6 302 = 6 302, TCB 297 = 297 (after the fix below), MobiCascais 1 155 = 1 155. **Metro de Lisboa 1 427 vs 1 110 (29 %)**: same four lines and service hours (06:30–01:10) in both, but the regional copy has more trips and almost no matching start times, so it is a different timetable version. The build stops on such a mismatch unless run with `--accept-mismatch`; the mismatch is recorded in the manifest and shown in the app's Help. *Which Metro timetable is right is an open question for Metro/TML.*
+
+Data fixes in the converter:
+- **Duplicate trips.** The regional feed lists TCB's trips twice (two overlapping plans, XLHRT and HG6A7), and a few Carris Metropolitana (59) and Carris (2) trips likewise, over the 14 days. Exact duplicates (same route, destination, stops and times) are merged. 55 131 merges in total, mostly one trip listed under plans for different dates (harmless, days combined).
+- **MTS** is excluded automatically: the feed claims 2024–2030 but has no trips on the build day.

@@ -17,7 +17,8 @@
         "./src/*"
       ]
     },
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true
   },
   "include": [
     "src",

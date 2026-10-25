@@ -1,0 +1,6 @@
+agency_id,cemv_support,continuous_drop_off,continuous_pickup,route_color,route_desc,route_id,route_long_name,route_short_name,route_text_color,route_type,route_url
+IA2N9,0,0,0,6699CC,,[IA2N9]1_0,Azul,Az,FFFFFF,1,
+KB1F6,0,1,1,00A3E8,,[KB1F6]1_0,Corroios - Cacilhas,1,FFFFFF,0,
+LTP61,0,1,1,E6126C,,[LTP61]1_0,Montijo - Cais do Sodré,MT,FFFFFF,4,
+YA15B,0,1,1,C61D23,,[YA15B]3715_0,Lisboa (M. Pombal) - Santa Marta do Pinhal (via Centro Sul),3715,FFFFFF,3,
+IA9T6,0,0,0,EC008C,,[IA9T6]76_0,Pç. Figueira - Algés,15E,000000,0,

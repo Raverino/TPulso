@@ -1,0 +1,13 @@
+agency_email,agency_fare_url,agency_id,agency_lang,agency_name,agency_phone,agency_timezone,agency_url,cemv_support,agency_code
+info@fertagus.pt,https://fertagus.pt/pt/tarifarios/fertagus,7NTB1,pt,Fertagus,+351211066363,Europe/Lisbon,https://fertagus.pt,0,15
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,A2L1N,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,44
+apoioaopassageiro@tcbarreiro.pt,https://tcbarreiro.pt/tarifarios,A3H3M,pt,Transportes Colectivos do Barreiro,+351212068787,Europe/Lisbon,https://tcbarreiro.pt,0,8
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,BNA17,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,42
+geral@mobicascais.pt,https://mobi.cascais.pt/geral/titulos-disponiveis-para-2025,HF16N,pt,MobiCascais,+351800203186,Europe/Lisbon,https://mobi.cascais.pt,0,21
+atendimento@metrolisboa.pt,https://metrolisboa.pt/comprar,IA2N9,pt,Metro de Lisboa,+351213500115,Europe/Lisbon,https://metrolisboa.pt,0,2
+atendimento@carris.pt,https://www.carris.pt/compre/tarifario,IA9T6,pt,CARRIS,+351213613000,Europe/Lisbon,https://carris.pt,0,1
+noreply@mts.pt,https://mts.pt/tarifarios,KB1F6,pt,Metro Transportes do Sul,+351211127056,Europe/Lisbon,https://mts.pt,0,16
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,LA77N,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,41
+apoio.cliente@ttsl.pt,https://ttsl.pt/passageiros/tarifario,LTP61,pt,Transtejo Soflusa,+351808203050,Europe/Lisbon,https://ttsl.pt,0,4
+noreply@cp.pt,https://cp.pt/info/pt/precos-comboios-urbanos-de-lisboa,N18KL,pt,Comboios de Portugal,212345678,Europe/Lisbon,https://cp.pt,0,3
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,YA15B,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,43
