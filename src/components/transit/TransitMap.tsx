@@ -319,7 +319,7 @@ export default function TransitMap({
       className="h-full w-full"
     >
       {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
-      <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} />
+      <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} className={MAP_TILES.className} />
       <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
       <GlideGuard />
       <ClearOnMapClick onClear={clear} />

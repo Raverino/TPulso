@@ -140,3 +140,15 @@ describe('upstream failure', () => {
     await expect(api('/api/stops', true).res).rejects.toThrow(/503/);
   });
 });
+
+describe('live feature flag', () => {
+  it('serves no live API while LIVE_ENABLED is off (the offline default)', async () => {
+    const worker = (await import('./index')).default;
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+    for (const env of [{}, { LIVE_ENABLED: 'false' }]) {
+      const res = await worker.fetch(new Request('http://x/api/vehicles?lat=38.7&lng=-9.1') as never, env, ctx);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'live_disabled' });
+    }
+  });
+});

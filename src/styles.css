@@ -478,3 +478,8 @@
   vertical-align: -1px;
   box-shadow: 0 0 0 1.5px var(--primary-foreground);
 }
+
+/* Fallback tiles only (no CARTO key): the original OV Pulse dark filter over OpenStreetMap tiles. */
+.tiles-dark {
+  filter: invert(1) hue-rotate(185deg) brightness(0.92) contrast(0.92) saturate(0.7);
+}

@@ -5,23 +5,41 @@ export interface TileConfig {
   url: string;
   attribution: string;
   maxZoom: number;
-  /** Shown on the map when the tiles cannot work as configured (e.g. a missing key). */
+  /** CSS class for the tile layer (only the fallback needs the original's dark filter). */
+  className: string;
+  /** Shown on the map when the tiles are not the intended production tiles. */
   problem: string | null;
 }
 
 /**
- * CARTO basemaps need a free key since 2026 (request one at carto.com/basemaps/apikey); without it
- * every tile is an "API KEY REQUIRED" placeholder. Put it in `.env` as VITE_CARTO_BASEMAPS_KEY
- * (git-ignored). It is a public browser key: restrict it to your domains in the CARTO dashboard.
+ * Intended tiles: CARTO "Dark Matter" without labels. CARTO needs a free key (carto.com/basemaps/apikey, email only);
+ * put it in `.env` as VITE_CARTO_BASEMAPS_KEY (git-ignored). It is a public browser key: restrict it to your domains
+ * in the CARTO dashboard before release.
+ *
+ * Without a key the map falls back to the standard OpenStreetMap tiles with the original OV Pulse dark filter.
+ * That is fine for development, but OpenStreetMap's tile usage policy does not allow it for a real app.
  */
 const CARTO_KEY: string = import.meta.env.VITE_CARTO_BASEMAPS_KEY ?? '';
-const CARTO_STYLE = 'dark_nolabels';
 
-/** Base map: CARTO "Dark Matter" without labels (already dark, so no CSS filter is applied). */
-export const MAP_TILES: TileConfig = {
-  url: `https://basemaps.cartocdn.com/rastertiles/${CARTO_STYLE}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(CARTO_KEY)}`,
-  attribution:
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a> · Carris Metropolitana',
-  maxZoom: 20,
-  problem: CARTO_KEY ? null : 'Map background needs a CARTO key (VITE_CARTO_BASEMAPS_KEY in .env).',
-};
+export const MAP_TILES: TileConfig = CARTO_KEY
+  ? {
+      url: `https://basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(CARTO_KEY)}`,
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 20,
+      className: '',
+      problem: null,
+    }
+  : {
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+      className: 'tiles-dark',
+      problem: 'Development map tiles (OpenStreetMap). Add a CARTO key for the real map.',
+    };
+
+/**
+ * Live data (TML API) feature flag. Off: TPulso is an offline timetable app (docs/OFFLINE.md). The live code is
+ * kept and tested but never called while this is false. Turn on with VITE_LIVE=true (and LIVE_ENABLED in wrangler).
+ */
+export const LIVE_ENABLED: boolean = import.meta.env.VITE_LIVE === 'true';

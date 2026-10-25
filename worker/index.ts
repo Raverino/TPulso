@@ -61,9 +61,16 @@ export async function handleApi(url: URL, p: TransitProvider, now: Date): Promis
   return error(404, 'not_found');
 }
 
+interface Env {
+  /** Feature flag for the TML live API (docs/OFFLINE.md §7). Off ("false") in the offline timetable version. */
+  LIVE_ENABLED?: string;
+}
+
 export default {
-  async fetch(request: Request, _env: unknown, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // The live provider is kept (and tested via handleApi) but switched off: no live API calls at runtime.
+    if (env.LIVE_ENABLED !== 'true') return error(404, 'live_disabled');
     // Feedback panel (ported from the original): no storage is configured in the MVP (no database),
     // so say so honestly instead of pretending it was sent.
     if (url.pathname === '/api/feedback') {
@@ -88,4 +95,4 @@ export default {
       return error(502, 'upstream_unavailable');
     }
   },
-} satisfies ExportedHandler;
+} satisfies ExportedHandler<Env>;

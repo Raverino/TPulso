@@ -18,6 +18,7 @@
     "worker",
     "shared",
     "src/lib",
+    "src/offline",
     "scripts",
     "fixtures/*.json"
   ],
