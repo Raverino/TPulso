@@ -25,11 +25,11 @@ import {
 // TPulso: offline timetable data layer, region config and display rule.
 import { LISBON } from "../shared/region";
 import { withinRadius } from "../shared/geo";
-import { addDays, decodePolyline, type LineShape, type RouteFile } from "../shared/timetable";
+import { addDays, decodePolyline, type AreaFile, type LineShape, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
-import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ScheduledDeparture } from "@/offline/engine";
+import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
 
@@ -128,25 +128,25 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [manifest, expired, tt.areas, tick],
   );
-  const vehicles: Vehicle[] = useMemo(
-    () =>
-      expected.map((v) => ({
-        id: v.key,
-        mode: v.mode,
-        line: v.line,
-        operator: opName.get(v.op) ?? v.op,
-        headsign: v.headsign,
-        lat: v.lat,
-        lng: v.lng,
-        bearing: v.bearing,
-        speedKmh: NaN,
-        punctualityMin: NaN,
-        routeId: String(v.patternId),
-        tripId: v.key,
-        live: false,
-      })),
-    [expected, opName],
+  const toVehicle = useCallback(
+    (v: ExpectedVehicle): Vehicle => ({
+      id: v.key,
+      mode: v.mode,
+      line: v.line,
+      operator: opName.get(v.op) ?? v.op,
+      headsign: v.headsign,
+      lat: v.lat,
+      lng: v.lng,
+      bearing: v.bearing,
+      speedKmh: NaN,
+      punctualityMin: NaN,
+      routeId: String(v.patternId),
+      tripId: v.key,
+      live: false,
+    }),
+    [opName],
   );
+  const vehicles: Vehicle[] = useMemo(() => expected.map(toVehicle), [expected, toVehicle]);
   const expectedByKey = useMemo(() => new Map(expected.map((v) => [v.key, v])), [expected]);
   const vehicleByKey = useMemo(() => new Map(vehicles.map((v) => [v.tripId, v])), [vehicles]);
 
@@ -300,10 +300,8 @@ export default function App() {
     () => (panelView === "stop" && stopPanel?.departures ? new Set(stopPanel.departures.map((d) => d.vehicleKey)) : null),
     [panelView, stopPanel],
   );
-  const visibleVehicles = useMemo(
-    () => (stopTripKeys ? vehicles.filter((v) => stopTripKeys.has(v.tripId)) : radarVehicles),
-    [stopTripKeys, vehicles, radarVehicles],
-  );
+  // Patterns of the trips coming to the open stop (trip key = "<pattern>:<trip>:<service date>").
+  const stopPatternIds = useMemo(() => (stopTripKeys ? [...new Set([...stopTripKeys].map((k) => Number(k.split(":")[0])))] : []), [stopTripKeys]);
   const inRange = radarVehicles.length;
 
   const focusStop = useMemo(() => {
@@ -312,7 +310,7 @@ export default function App() {
     const v = vehicleByKey.get(d.vehicleKey);
     return { lat: d.stopLat, lng: d.stopLng, name: d.stopName, label: countdownLabel(Math.round(d.expectedAt / 1000), nowSec, "scheduled"), vehicleId: v?.id ?? null };
   }, [openId, board, vehicleByKey, nowSec]);
-  const selected = selectedId ? visibleVehicles.find((v) => v.id === selectedId) : undefined;
+  const selected = selectedId ? radarVehicles.find((v) => v.id === selectedId) : undefined;
   // Flip back once the vehicle leaves the radar or its trip ends.
   useEffect(() => {
     if (selectedId && !selected) setSelectedId(null);
@@ -340,7 +338,10 @@ export default function App() {
   // TPulso: whole route lines (first stop to terminus) from the route files, for every vehicle shown and the
   // selected one — independent of the radar radius and of which map areas are loaded.
   const [routeFiles, setRouteFiles] = useState<Map<number, RouteFile>>(new Map());
-  const shownPatterns = useMemo(() => [...new Set([...visibleVehicles.map((v) => Number(v.routeId)), ...(selectedPattern !== undefined ? [selectedPattern] : [])])], [visibleVehicles, selectedPattern]);
+  const shownPatterns = useMemo(
+    () => [...new Set([...(stopTripKeys ? stopPatternIds : radarVehicles.map((v) => Number(v.routeId))), ...(selectedPattern !== undefined ? [selectedPattern] : [])])],
+    [stopTripKeys, stopPatternIds, radarVehicles, selectedPattern],
+  );
   useEffect(() => {
     if (!manifest) return;
     let stop = false;
@@ -357,6 +358,16 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest, shownPatterns.join(",")]);
+  // While a stop is open: the vehicles coming to it, calculated from their full routes, so a train or tram
+  // a few minutes away shows even outside the loaded map areas. Otherwise: the vehicles inside the radar.
+  const visibleVehicles = useMemo(() => {
+    if (!stopTripKeys) return radarVehicles;
+    if (!manifest || expired) return [];
+    const patterns = stopPatternIds.map((id) => routeFiles.get(id)).filter((r): r is RouteFile => !!r);
+    const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
+    return expectedVehicles(manifest, [pseudo], now).filter((v) => stopTripKeys.has(v.key)).map(toVehicle);
+  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle]);
+
   const routes = useMemo(() => {
     const m = new Map<string, TransitRoute>();
     for (const id of shownPatterns) {
