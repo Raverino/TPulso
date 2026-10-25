@@ -13,8 +13,9 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
 - Data-source display rule (every departure and every vehicle shows its source; logic in `src/lib/sourceStatus.ts`):
   - **Live**: green, solid, pulsing dot; time like "3 min".
   - **Scheduled**: blue-grey, outline-only dot; time like "~3 min".
+  - **Estimated**: lilac, dashed outline; time like "~3 min". Used for a selected bus's upcoming stops that have no Live/Scheduled row: computed from distance along the route and the bus's recent speed (`src/lib/eta.ts`, after the original's upcomingStopsFor/etaS).
   - **Stale**: grey, faded; text "last seen X ago".
-  - **Expected position** (later): dashed outline.
+  - **Expected position** (later): was "dashed outline", which Estimated now uses. Pick a different look before building it.
   - Delay is shown as text ("+3 min") with an arrow, never by changing the source colour.
   - Never rely on colour alone (shape, fill, motion and text must also differ). A small on-screen legend explains the states.
 - TEST mode: if the user is outside Portugal (or GPS is denied), use Marquês de Pombal (Metro) P1, Lisboa (38.725878, -9.151315; TML stop 060033) and show a clear "TEST" label in the UI. (Avenida da Liberdade was dropped: it has no TML stops within 500 m — see docs/DATA.md.)

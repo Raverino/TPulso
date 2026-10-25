@@ -1,12 +1,12 @@
 // The radar screen, ported from the original OV Pulse src/routes/index.tsx (layout, top bar, radius
 // buttons, map + drawer split, GPS overlay, clock, select/open behaviour), on the TML data layer.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { Crosshair, LoaderCircle, Radar } from 'lucide-react';
+import { Bus, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from 'lucide-react';
 
 import { withinRadius } from '../shared/geo';
 import { LISBON } from '../shared/region';
-import type { StopLite } from '../shared/types';
-import ArrivalsDrawer from '@/components/transit/ArrivalsDrawer';
+import type { Departure, StopLite, TransportMode } from '../shared/types';
+import ArrivalsDrawer, { type SelectedStop } from '@/components/transit/ArrivalsDrawer';
 import type { FocusStop } from '@/components/transit/TransitMap';
 import { Legend } from '@/components/Legend';
 import { loadStops, type StopsResult } from '@/lib/stopCache';
@@ -15,6 +15,9 @@ import { clockSec, distanceMeters, type Arrival, type UpcomingStop } from '@/lib
 import { useBoard } from '@/lib/useBoard';
 import { useLocation, type TestReason } from '@/lib/useLocation';
 import { useNow } from '@/lib/useNow';
+import { useStopDepartures } from '@/lib/useStopDepartures';
+import { useVehicleStopTimes } from '@/lib/useVehicleStopTimes';
+import { buildStopEtas, recentSpeedMps } from '@/lib/eta';
 import { useVehicleRoute } from '@/lib/useVehicleRoute';
 import { useVehicles } from '@/lib/useVehicles';
 
@@ -25,6 +28,22 @@ const RADII = region.radii;
 /** Like the original: only departures leaving within 10 minutes, at most 30. */
 const WINDOW_SEC = 600;
 const MAX_ROWS = 30;
+
+type FilterMode = 'all' | TransportMode;
+
+// Vehicle-type filter from the original OV Pulse, plus Ferry. Modes without a data source yet stay
+// visible but disabled ("no data yet"); see region.modesWithData and docs/OPERATORS.md.
+const FILTERS: { key: FilterMode; label: string; icon: typeof Bus }[] = [
+  { key: 'all', label: 'All', icon: Layers },
+  { key: 'bus', label: 'Bus', icon: Bus },
+  { key: 'tram', label: 'Tram·Metro', icon: TramFront },
+  { key: 'train', label: 'Train', icon: TrainFront },
+  { key: 'ferry', label: 'Ferry', icon: Ship },
+];
+const hasData = (k: FilterMode) => k === 'all' || region.modesWithData.includes(k);
+
+/** Everything TPulso shows today comes from Carris Metropolitana, which is bus-only. */
+const DATA_MODE: TransportMode = 'bus';
 
 const TEST_REASON: Record<TestReason, string> = {
   denied: 'Location permission is off',
@@ -41,6 +60,10 @@ export default function App() {
   const nowSec = Math.floor(now / 1000);
   const [radius, setRadius] = useState<number>(region.defaultRadius);
   const [testAccepted, setTestAccepted] = useState(false);
+  const [filter, setFilter] = useState<FilterMode>('all');
+  const [recenterRequest, setRecenterRequest] = useState(0);
+  /** The filter applies to the map, the stops and the departure list. */
+  const showData = filter === 'all' || filter === DATA_MODE;
 
   // Trimmed stop list, cached on the phone and refreshed about daily.
   const [stopsState, setStopsState] = useState<StopsState>({ status: 'loading' });
@@ -57,18 +80,18 @@ export default function App() {
   const center = loc.mode === 'locating' ? null : loc.position;
   const isTest = loc.mode === 'test';
   const nearStops = useMemo(
-    () => (center && stopsState.status === 'ready' ? withinRadius(stopsState.stops, center, radius) : []),
-    [center, stopsState, radius],
+    () => (showData && center && stopsState.status === 'ready' ? withinRadius(stopsState.stops, center, radius) : []),
+    [showData, center, stopsState, radius],
   );
 
   const live = useVehicles(center, radius);
   const board = useBoard(center, radius);
-  const vehicles = live.vehicles;
+  const vehicles = useMemo(() => (showData ? live.vehicles : []), [showData, live.vehicles]);
   const vehicleByTrip = useMemo(() => new Map(vehicles.map(v => [v.tripId, v])), [vehicles]);
 
   // Departures inside the radar, leaving within 10 minutes, soonest first.
   const arrivals = useMemo((): Arrival[] => {
-    if (!board.board) return [];
+    if (!board.board || !showData) return [];
     return board.board.departures
       .filter(d => d.distanceM <= radius)
       .filter(d => {
@@ -91,7 +114,7 @@ export default function App() {
         // Exact link: departure trip_id == vehicle trip_id.
         vehicleId: d.tripId ? (vehicleByTrip.get(d.tripId)?.id ?? null) : null,
       }));
-  }, [board.board, radius, nowSec, vehicleByTrip]);
+  }, [board.board, showData, radius, nowSec, vehicleByTrip]);
 
   const boardNote = useMemo(() => {
     const b = board.board;
@@ -109,33 +132,93 @@ export default function App() {
   useEffect(() => {
     if (selectedId && live.updatedAt !== null && !selected) setSelectedId(null);
   }, [selectedId, selected, live.updatedAt]);
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const resetPanel = useCallback(() => {
     setSelectedId(null);
+    setSelectedStopId(null);
     setOpenId(null);
   }, []);
+  const selectStop = useCallback((id: string) => {
+    setSelectedId(null);
+    setOpenId(null);
+    setSelectedStopId(cur => (cur === id ? null : id));
+  }, []);
+
+  // Tapped stop: use the board when it covers this stop, otherwise fetch the stop's own departures.
+  const tappedStop = selectedStopId ? nearStops.find(s => s.id === selectedStopId) : undefined;
+  useEffect(() => {
+    if (selectedStopId && stopsState.status === 'ready' && !tappedStop) setSelectedStopId(null); // left the radar or filtered out
+  }, [selectedStopId, tappedStop, stopsState.status]);
+  const onBoard = !!(tappedStop && board.board?.stopIds.includes(tappedStop.id));
+  const stopFetch = useStopDepartures(tappedStop && board.board && !onBoard ? tappedStop.id : null);
+  const selectedStop = useMemo((): SelectedStop | undefined => {
+    if (!tappedStop) return undefined;
+    const inWindow = (at: number) => at - nowSec >= -60 && at - nowSec <= WINDOW_SEC;
+    const distanceM = Math.round(tappedStop.distance);
+    const toRow = (d: Departure, id: string): Arrival => ({
+      id,
+      stopId: tappedStop.id,
+      stopName: tappedStop.name,
+      stopLat: tappedStop.lat,
+      stopLng: tappedStop.lng,
+      line: d.line,
+      headsign: d.headsign,
+      scheduledAt: d.scheduledAt,
+      estimatedAt: d.estimatedAt,
+      distanceM,
+      tripId: d.tripId,
+      vehicleId: d.tripId ? (vehicleByTrip.get(d.tripId)?.id ?? null) : null,
+    });
+    const base = { id: tappedStop.id, name: tappedStop.name, distanceM };
+    if (onBoard && board.board) {
+      const rows = board.board.departures
+        .filter(d => d.stopId === tappedStop.id && inWindow(d.estimatedAt ?? d.scheduledAt))
+        .map(d => toRow(d, d.id));
+      return { ...base, departures: rows, fetchedAt: board.fetchedAt, error: board.error };
+    }
+    const rows = stopFetch.list
+      ? stopFetch.list.departures
+          .filter(d => inWindow(d.estimatedAt ?? d.scheduledAt))
+          .map(d => toRow(d, `${d.tripId ?? `${d.line}|${d.headsign}|${d.scheduledAt}`}@${tappedStop.id}`))
+      : null;
+    return { ...base, departures: rows, fetchedAt: stopFetch.fetchedAt, error: board.board ? stopFetch.error : board.error };
+  }, [tappedStop, onBoard, board.board, board.fetchedAt, board.error, stopFetch, nowSec, vehicleByTrip]);
 
   const routeState = useVehicleRoute(selectedId);
   const route = routeState.status === 'ready' ? routeState.route : null;
 
   // The selected bus's remaining stops, from its route's stop sequence (exact stop_ids), with a
   // live time where the board has this trip at that stop.
+  // Every remaining stop of the selected bus gets one time and one state (src/lib/eta.ts):
+  // Live / Scheduled from this trip's own rows (exact trip_id: the next ~10 stops plus any board rows),
+  // otherwise Estimated from route distance and the bus's recent speed.
+  const stopTimes = useVehicleStopTimes(selectedId);
+  const fixes = selectedId ? live.fixes.get(selectedId) : undefined;
   const { upcoming, beyond } = useMemo(() => {
     if (!route || !center || !selected) return { upcoming: [] as UpcomingStop[], beyond: [] as UpcomingStop[] };
     const from = route.nextStopId ? route.stopIds.indexOf(route.nextStopId) : -1;
-    const rest = from >= 0 ? route.stopIds.slice(from) : [];
-    const liveAt = new Map(
-      (board.board?.departures ?? []).filter(d => d.tripId === selected.tripId && d.estimatedAt !== null).map(d => [d.stopId, d.estimatedAt]),
-    );
-    const list: UpcomingStop[] = [];
-    rest.forEach((id, i) => {
+    const stops = (from >= 0 ? route.stopIds.slice(from) : []).flatMap(id => {
       const s = stopById.get(id);
-      if (s) list.push({ key: `${i}-${id}`, stopId: id, name: s.name, lat: s.lat, lng: s.lng, estimatedAt: liveAt.get(id) ?? null });
+      return s ? [{ id, name: s.name, lat: s.lat, lng: s.lng }] : [];
     });
+    const times = new Map((stopTimes?.vehicleId === selected.id ? stopTimes.times : []).map(t => [t.stopId, t]));
+    for (const d of board.board?.departures ?? []) {
+      if (d.tripId === selected.tripId && !times.has(d.stopId)) times.set(d.stopId, d);
+    }
+    const etas = buildStopEtas({
+      stops,
+      path: route.path,
+      vehicle: selected,
+      nowSec,
+      speedMps: fixes ? recentSpeedMps(fixes, route.path) : null,
+      times: [...times.values()],
+    });
+    const list: UpcomingStop[] = etas.map((e, i) => ({ key: `${i}-${e.id}`, stopId: e.id, name: e.name, lat: e.lat, lng: e.lng, state: e.state, atSec: e.atSec }));
     return {
       upcoming: list.filter(u => distanceMeters(u, center) <= radius),
       beyond: list.filter(u => distanceMeters(u, center) > radius),
     };
-  }, [route, center, selected, board.board, stopById, radius]);
+  }, [route, center, selected, board.board, stopById, radius, stopTimes, fixes, nowSec]);
 
   const vehicleDelay = useMemo(() => {
     if (!selected || !board.board) return null;
@@ -214,8 +297,36 @@ export default function App() {
           ))}
         </div>
 
+        <div className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5" role="group" aria-label="Vehicle type">
+          {FILTERS.map(({ key, label, icon: Icon }) => {
+            const enabled = hasData(key);
+            return (
+              <button
+                key={key}
+                onClick={() => enabled && setFilter(key)}
+                disabled={!enabled}
+                aria-pressed={filter === key}
+                title={enabled ? label : `${label} · no data yet`}
+                aria-label={enabled ? label : `${label}, no data yet`}
+                className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors ${
+                  filter === key ? 'bg-primary text-primary-foreground' : enabled ? 'text-foreground/70' : 'cursor-not-allowed text-foreground/35'
+                }`}
+              >
+                <Icon className="size-3 shrink-0" />
+                <span className={enabled ? 'hidden sm:inline' : 'flex flex-col items-start leading-[1.05]'}>
+                  <span className={enabled ? '' : 'hidden sm:inline'}>{label}</span>
+                  {!enabled && <span className="text-[8px] font-medium">no data yet</span>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         <button
-          onClick={locate}
+          onClick={() => {
+            locate();
+            setRecenterRequest(n => n + 1);
+          }}
           aria-label="Recentre on my location"
           className="grid size-7 place-items-center rounded-xl border border-border bg-surface-2 text-foreground/80 active:scale-95"
         >
@@ -244,11 +355,17 @@ export default function App() {
                 selectedPath={route?.path ?? []}
                 upcoming={upcoming}
                 focusStop={focusStop}
+                selectedStopId={selectedStopId}
+                onSelectStop={selectStop}
+                recenterRequest={recenterRequest}
                 now={now}
                 onSelect={id => {
                   // Empty-radar tap or re-tapping the selected vehicle: reset everything.
                   if (id === null || id === selectedId) resetPanel();
-                  else setSelectedId(id);
+                  else {
+                    setSelectedStopId(null);
+                    setSelectedId(id);
+                  }
                 }}
               />
             </Suspense>
@@ -320,7 +437,12 @@ export default function App() {
           upcoming={upcoming}
           beyond={beyond}
           onClose={() => setSelectedId(null)}
-          onSelectVehicle={id => setSelectedId(id === selectedId ? null : id)}
+          stop={selectedStop}
+          onCloseStop={() => setSelectedStopId(null)}
+          onSelectVehicle={id => {
+            setSelectedStopId(null);
+            setSelectedId(id === selectedId ? null : id);
+          }}
           openId={openId}
           radarVehicles={
             center

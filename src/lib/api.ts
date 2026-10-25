@@ -1,4 +1,4 @@
-import type { Board, DepartureList, LatLng, StopList, VehicleList, VehicleRoute } from '../../shared/types';
+import type { Board, DepartureList, LatLng, StopList, VehicleList, VehicleRoute, VehicleStopTimes } from '../../shared/types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -28,6 +28,8 @@ export const api = {
     getJson<VehicleList>(`/api/vehicles?lat=${c.lat.toFixed(6)}&lng=${c.lng.toFixed(6)}&radius=${Math.round(radius)}`, signal),
   board: (c: LatLng, radius: number, signal?: AbortSignal) =>
     getJson<Board>(`/api/board?lat=${c.lat.toFixed(6)}&lng=${c.lng.toFixed(6)}&radius=${Math.round(radius)}`, signal),
+  vehicleStopTimes: (id: string, signal?: AbortSignal) =>
+    getJson<VehicleStopTimes>(`/api/vehicles/${encodeURIComponent(id)}/stop-times`, signal),
   vehicleRoute: (id: string, signal?: AbortSignal) =>
     getJson<VehicleRoute>(`/api/vehicles/${encodeURIComponent(id)}/route`, signal),
 };

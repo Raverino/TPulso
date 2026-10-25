@@ -147,11 +147,6 @@
   color: var(--color-muted-foreground) !important;
 }
 
-/* Dark tiles: OSM raster tiles, desaturated and inverted-lite. */
-.tiles-dark {
-  filter: invert(1) hue-rotate(185deg) brightness(0.92) contrast(0.92) saturate(0.7);
-}
-
 /* --- User location pulse --------------------------------------------- */
 
 .locate-dot {
@@ -410,6 +405,7 @@
   --src-live: oklch(0.78 0.19 145);
   --src-scheduled: oklch(0.72 0.03 250);
   --src-stale: oklch(0.62 0.01 250);
+  --src-estimated: oklch(0.8 0.1 300);
 }
 .src-dot {
   position: relative;
@@ -446,6 +442,13 @@
   background: var(--src-stale);
   opacity: 0.5;
 }
+/* Estimated: dashed outline (and its own hue), so it never looks like Scheduled's solid outline */
+.src-estimated {
+  background: transparent;
+  border: 2px dashed var(--src-estimated);
+  width: 10px;
+  height: 10px;
+}
 .src-expected {
   background: transparent;
   border: 2px dashed var(--src-scheduled);
@@ -467,4 +470,11 @@
 .stop-pin.in-radar {
   width: 10px;
   height: 10px;
+}
+
+/* Source dot inside the ETA pill above an upcoming stop */
+.upcoming-eta .eta-src {
+  margin-right: 4px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1.5px var(--primary-foreground);
 }

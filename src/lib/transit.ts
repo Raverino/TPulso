@@ -4,6 +4,7 @@
 
 import { distanceMeters } from '../../shared/geo';
 import type { LatLng } from '../../shared/types';
+import type { StopTimeState } from './eta';
 
 export { distanceMeters };
 export type { LatLng };
@@ -52,8 +53,10 @@ export interface UpcomingStop {
   name: string;
   lat: number;
   lng: number;
-  /** Live estimate for this vehicle's trip at this stop, when the board has it (Unix seconds). */
-  estimatedAt: number | null;
+  /** Exactly one source state per stop (src/lib/eta.ts). */
+  state: StopTimeState;
+  /** Unix seconds. */
+  atSec: number;
 }
 
 const clockFmt = new Intl.DateTimeFormat('pt-PT', { timeZone: 'Europe/Lisbon', hour: '2-digit', minute: '2-digit' });

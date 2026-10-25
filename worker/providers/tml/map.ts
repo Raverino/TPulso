@@ -2,7 +2,7 @@
 // tested directly against fixtures/.
 
 import { distanceMeters } from '../../../shared/geo';
-import type { BoardDeparture, Departure, LatLng, StopLite, Vehicle, VehicleRoute } from '../../../shared/types';
+import type { BoardDeparture, Departure, LatLng, StopLite, Vehicle, VehicleRoute, VehicleStopTime } from '../../../shared/types';
 import { stripNamespace } from './ids';
 import type { RawArrival, RawLine, RawPattern, RawShape, RawStop, RawVehicle } from './raw';
 
@@ -105,6 +105,18 @@ export function toBoardDepartures(stop: StopLite & { distance: number }, deps: r
     stopLng: stop.lng,
     distanceM: Math.round(stop.distance),
   }));
+}
+
+/** The next `count` stop IDs of a route, starting at the stop the vehicle is heading to. */
+export function nextStopIds(stopIds: readonly string[], nextStopId: string | null, count: number): string[] {
+  const from = nextStopId ? stopIds.indexOf(nextStopId) : -1;
+  return from >= 0 ? stopIds.slice(from, from + count) : [];
+}
+
+/** This trip's row in one stop's arrivals, by exact trip_id; null when the stop has no row for it. */
+export function matchTripAtStop(arrivals: readonly RawArrival[], tripId: string, stopId: string): VehicleStopTime | null {
+  const a = arrivals.find(x => x.trip_id === tripId);
+  return a ? { stopId, scheduledAt: a.scheduled_arrival_unix, estimatedAt: a.estimated_arrival_unix } : null;
 }
 
 /** "YYYYMMDD" calendar date in the given time zone. */

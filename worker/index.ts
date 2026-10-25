@@ -52,6 +52,12 @@ export async function handleApi(url: URL, p: TransitProvider, now: Date): Promis
     return route ? json(route, 30) : error(404, 'vehicle_not_found');
   }
 
+  m = path.match(/^\/api\/vehicles\/([^/]+)\/stop-times$/);
+  if (m) {
+    const times = await p.vehicleStopTimes(decodeURIComponent(m[1]!), now);
+    return times ? json(times, 15) : error(404, 'vehicle_not_found');
+  }
+
   return error(404, 'not_found');
 }
 

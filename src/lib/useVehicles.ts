@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import type { LatLng, Vehicle } from '../../shared/types';
 import { api } from './api';
+import type { Fix } from './eta';
+
+const MAX_FIXES = 8;
 
 export const VEHICLE_POLL_MS = 15_000;
 
 export interface VehiclesState {
   vehicles: Vehicle[];
+  /** Last GPS fixes per vehicle (oldest first), for the recent-speed estimate. */
+  fixes: ReadonlyMap<string, Fix[]>;
   /** When the last successful update arrived (ms). */
   updatedAt: number | null;
   error: string | null;
@@ -13,7 +18,7 @@ export interface VehiclesState {
 
 /** Live buses within `radius` of `center`, refreshed every 15 s while the page is visible. */
 export function useVehicles(center: LatLng | null, radius: number): VehiclesState {
-  const [state, setState] = useState<VehiclesState>({ vehicles: [], updatedAt: null, error: null });
+  const [state, setState] = useState<VehiclesState>({ vehicles: [], fixes: new Map(), updatedAt: null, error: null });
   const lat = center?.lat;
   const lng = center?.lng;
 
@@ -22,6 +27,7 @@ export function useVehicles(center: LatLng | null, radius: number): VehiclesStat
     let ctrl: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    const history = new Map<string, Fix[]>();
 
     const tick = async () => {
       clearTimeout(timer);
@@ -30,7 +36,13 @@ export function useVehicles(center: LatLng | null, radius: number): VehiclesStat
       ctrl = new AbortController();
       try {
         const list = await api.vehicles({ lat, lng }, radius, ctrl.signal);
-        if (!stopped) setState({ vehicles: list.vehicles, updatedAt: Date.now(), error: null });
+        if (!stopped) {
+          for (const v of list.vehicles) {
+            const prev = history.get(v.id) ?? [];
+            if (prev[prev.length - 1]?.t !== v.timestamp) history.set(v.id, [...prev, { lat: v.lat, lng: v.lng, t: v.timestamp }].slice(-MAX_FIXES));
+          }
+          setState({ vehicles: list.vehicles, fixes: new Map(history), updatedAt: Date.now(), error: null });
+        }
       } catch (e) {
         if ((e as Error).name === 'AbortError') return;
         // Keep showing nothing rather than old positions as if they were live.

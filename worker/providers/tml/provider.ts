@@ -1,11 +1,13 @@
 import { withinRadius } from '../../../shared/geo';
 import type { RegionConfig } from '../../../shared/region';
-import type { Board, DepartureList, LatLng, StopList, TransitProvider, VehicleList, VehicleRoute } from '../../../shared/types';
+import type { Board, DepartureList, LatLng, StopList, TransitProvider, VehicleList, VehicleRoute, VehicleStopTimes } from '../../../shared/types';
 import { TmlClient } from './client';
 import { stripNamespace } from './ids';
 import {
   dateInZone,
   indexLines,
+  matchTripAtStop,
+  nextStopIds,
   pickPattern,
   rawVehiclesNear,
   toBoardDepartures,
@@ -28,6 +30,8 @@ export const MAX_BOARD_STOPS = 20;
 const BOARD_WINDOW: DepartureWindow = { pastGraceSec: 60, horizonSec: 30 * 60, max: 12 };
 /** Destinations are looked up for at most this many distinct patterns per request. */
 const MAX_HEADSIGN_PATTERNS = 30;
+/** A selected vehicle's own times are looked up at this many next stops. */
+export const VEHICLE_STOP_TIMES_COUNT = 10;
 
 export class TmlProvider implements TransitProvider {
   private readonly client: TmlClient;
@@ -70,6 +74,7 @@ export class TmlProvider implements TransitProvider {
       stopsInRadius: inside.length,
       stopsQueried: queried.length,
       stopsFailed: failed,
+      stopIds: queried.map(s => s.id),
       departures,
     };
   }
@@ -94,6 +99,25 @@ export class TmlProvider implements TransitProvider {
     const pattern = await this.patternFor(stripNamespace(v.pattern_id), now);
     const shape = pattern ? await this.client.getJson<RawShape>(`/shapes/${encodeURIComponent(pattern.shape_id)}`, TTL.shape) : null;
     return toVehicleRoute(v, lines, pattern, shape);
+  }
+
+  /**
+   * This vehicle's own times at its next VEHICLE_STOP_TIMES_COUNT stops: each stop's arrivals are fetched
+   * and the vehicle's row is found by exact trip_id. Stops without a row are left out (the app estimates them).
+   */
+  async vehicleStopTimes(vehicleId: string, now: Date): Promise<VehicleStopTimes | null> {
+    const route = await this.vehicleRoute(vehicleId, now);
+    if (!route) return null;
+    const v = (await this.rawVehicles()).find(x => x.id === vehicleId);
+    if (!v) return null;
+    const checked = nextStopIds(route.stopIds, route.nextStopId, VEHICLE_STOP_TIMES_COUNT);
+    const rows = await Promise.allSettled(checked.map(id => this.arrivals(id)));
+    const times = rows.flatMap((r, i) => {
+      if (r.status === 'rejected') return [];
+      const t = matchTripAtStop(r.value, v.trip_id, checked[i]!);
+      return t ? [t] : [];
+    });
+    return { vehicleId, generatedAt: now.toISOString(), checkedStopIds: checked, times };
   }
 
   /** The pattern version valid today (Lisbon), or null when the API has none (docs/DATA.md mismatch #10). */

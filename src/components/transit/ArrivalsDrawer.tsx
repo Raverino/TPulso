@@ -3,7 +3,7 @@
 // Changes: every row shows its data source (Live / Scheduled / Stale, CLAUDE.md), delays as text with
 // an arrow. Not ported (out of MVP scope per BRIEF.md): follow/pin, Help and Feedback panels.
 import { useRef, useState } from 'react';
-import { ArrowLeft, Bus, Footprints, Radio } from 'lucide-react';
+import { ArrowLeft, Bus, Footprints, MapPin, Radio } from 'lucide-react';
 
 import { SourceDot } from '@/components/SourceDot';
 import {
@@ -17,6 +17,18 @@ import {
 } from '@/lib/sourceStatus';
 import { clock, type Arrival, type UpcomingStop } from '@/lib/transit';
 import type { Vehicle } from '../../../shared/types';
+
+/** A tapped stop and its departures for the next 10 minutes. */
+export interface SelectedStop {
+  id: string;
+  name: string;
+  distanceM: number;
+  /** null while loading. */
+  departures: Arrival[] | null;
+  /** When the departures were fetched (ms), for the stale state. */
+  fetchedAt: number | null;
+  error: string | null;
+}
 
 export interface RadarVehicle {
   id: string;
@@ -41,6 +53,8 @@ interface Props {
   upcoming: UpcomingStop[];
   beyond: UpcomingStop[];
   onClose: () => void;
+  stop?: SelectedStop | undefined;
+  onCloseStop: () => void;
   openId?: string | null;
   radarVehicles?: RadarVehicle[];
   onOpen?: (id: string | null) => void;
@@ -61,6 +75,8 @@ export default function ArrivalsDrawer({
   upcoming,
   beyond,
   onClose,
+  stop,
+  onCloseStop,
   onSelectVehicle,
   openId = null,
   radarVehicles = [],
@@ -76,8 +92,11 @@ export default function ArrivalsDrawer({
   // Keep showing the last vehicle while the card flips back.
   const last = useRef<{ v: Vehicle; d: Arrival | null; u: UpcomingStop[]; b: UpcomingStop[] } | null>(null);
   if (vehicle) last.current = { v: vehicle, d: vehicleDelay, u: upcoming, b: beyond };
-  const flipped = !!vehicle;
+  const lastStop = useRef<SelectedStop | null>(null);
+  if (stop) lastStop.current = stop;
+  const flipped = !!vehicle || !!stop;
   const back = last.current;
+  const backStop = stop ?? (vehicle ? null : lastStop.current);
 
   return (
     <aside className="relative min-h-0 flex-1 border-border bg-background [perspective:1400px] md:w-[360px] md:flex-none md:border-l">
@@ -239,7 +258,9 @@ export default function ArrivalsDrawer({
           className={`absolute inset-0 flex flex-col bg-surface [backface-visibility:hidden] [transform:rotateY(180deg)] ${flipped ? '' : 'pointer-events-none'}`}
           aria-hidden={!flipped}
         >
-          {back ? (
+          {backStop ? (
+            <StopDetails stop={backStop} now={now} onClose={onCloseStop} />
+          ) : back ? (
             <VehicleDetails
               v={back.v}
               delay={back.d}
@@ -253,6 +274,89 @@ export default function ArrivalsDrawer({
         </div>
       </div>
     </aside>
+  );
+}
+
+function StopDetails({ stop, now, onClose }: { stop: SelectedStop; now: number; onClose: () => void }) {
+  const nowSec = Math.floor(now / 1000);
+  const ageSec = stop.fetchedAt ? (now - stop.fetchedAt) / 1000 : 0;
+  return (
+    <>
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
+        <button
+          onClick={onClose}
+          aria-label="Back to departures"
+          className="grid size-7 place-items-center rounded-lg bg-surface-2 text-foreground/80 active:scale-95"
+        >
+          <ArrowLeft className="size-3.5" />
+        </button>
+        <h2 className="font-display text-sm font-bold">Stop</h2>
+      </div>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-surface-2 text-primary">
+          <MapPin className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <div className="font-display text-lg font-bold leading-tight">{stop.name}</div>
+          <div className="text-[11px] text-muted-foreground">{stop.distanceM} m away · next 10 min</div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-2 pb-3">
+        {stop.departures === null ? (
+          stop.error ? (
+            <p className="px-2 py-6 text-center text-sm text-destructive">Departures unavailable: {stop.error}</p>
+          ) : (
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">Loading departures…</p>
+          )
+        ) : (
+          <>
+            {stop.error && (
+              <p className="px-2 pb-1 text-[11px] text-destructive">Refresh failed ({stop.error}); showing departures from {agoLabel(ageSec)} ago.</p>
+            )}
+            {stop.departures.length === 0 ? (
+              <p className="px-2 py-6 text-center text-sm text-muted-foreground">No departures in the next 10 minutes.</p>
+            ) : (
+              <ul className="space-y-1">
+                {stop.departures.map(a => {
+                  const state = departureSource(a, ageSec);
+                  const delay = state === 'live' ? delayInfo(a) : null;
+                  return (
+                    <li key={a.id} className={`flex items-center gap-2.5 rounded-xl bg-surface-2/60 px-2.5 py-1.5 ${state === 'stale' ? 'opacity-60' : ''}`}>
+                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-bus">
+                        <Bus className="size-3.5 text-primary-foreground" />
+                      </span>
+                      <div className="min-w-0 flex-1 truncate">
+                        <span className="font-display text-xs font-bold">{a.line}</span>{' '}
+                        <span className="text-xs text-foreground/80">{a.headsign}</span>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="flex items-center justify-end gap-1.5 font-display text-sm font-bold leading-none">
+                          <SourceDot state={state} />
+                          <span className="tabular-nums">{countdownLabel(a.estimatedAt ?? a.scheduledAt, nowSec, state)}</span>
+                        </div>
+                        <div className="mt-0.5 text-[9px] text-muted-foreground">
+                          {state === 'stale' ? (
+                            `last seen ${agoLabel(ageSec)} ago`
+                          ) : state === 'scheduled' ? (
+                            'scheduled'
+                          ) : delay ? (
+                            <span className={delay.minutes > 0 ? 'text-destructive' : 'text-accent'} aria-label={delay.spoken}>
+                              {delay.arrow} {delay.text}
+                            </span>
+                          ) : (
+                            'live · on time'
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -392,14 +496,13 @@ function StopSection({
                 className={`absolute -left-[5px] size-2.5 rounded-full ${accent ? 'bg-primary' : 'border border-muted-foreground bg-surface'}`}
               />
               <div className={`min-w-0 flex-1 truncate text-xs font-semibold ${accent ? '' : 'text-foreground/70'}`}>{u.name}</div>
-              {u.estimatedAt !== null ? (
-                <span className="flex items-center gap-1.5 font-display text-sm font-bold">
-                  <SourceDot state="live" />
-                  {countdownLabel(u.estimatedAt, nowSec, 'live')}
-                </span>
-              ) : (
-                <span className="text-[10px] text-muted-foreground">no live time</span>
-              )}
+              <span
+                className={`flex items-center gap-1.5 font-display text-sm font-bold ${u.state === 'live' ? '' : 'text-foreground/75'}`}
+                aria-label={`${SOURCE_TEXT[u.state]} ${countdownLabel(u.atSec, nowSec, u.state)}`}
+              >
+                <SourceDot state={u.state} />
+                {countdownLabel(u.atSec, nowSec, u.state)}
+              </span>
             </li>
           ))}
         </ol>

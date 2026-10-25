@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LISBON } from '../shared/region';
-import type { Board, DepartureList, StopList, VehicleList, VehicleRoute } from '../shared/types';
+import type { Board, DepartureList, StopList, VehicleList, VehicleRoute, VehicleStopTimes } from '../shared/types';
 import { handleApi } from './index';
 import { TML_BASE_URL, TmlClient } from './providers/tml/client';
 import { TmlProvider } from './providers/tml/provider';
@@ -76,6 +76,8 @@ describe('GET /api/board', () => {
     const body = (await (await api(`/api/board?lat=${lat}&lng=${lng}&radius=500`).res).json()) as Board;
     expect(body.stopsInRadius).toBe(7);
     expect(body.stopsQueried).toBe(7);
+    expect(body.stopIds[0]).toBe('060033');
+    expect(body.stopIds).toContain('060035');
     const d = body.departures.find(x => x.tripId === meta.chosen_vehicle.trip_id)!;
     expect(d).toMatchObject({ stopId: '060035', stopName: 'R Joaquim António Aguiar', line: '3715' });
     expect(d.distanceM).toBeGreaterThan(300);
@@ -116,6 +118,20 @@ describe('GET /api/vehicles/:id/route', () => {
   });
   it('404s for a vehicle not in the feed', async () => {
     expect((await api('/api/vehicles/nope/route').res).status).toBe(404);
+  });
+});
+
+describe('GET /api/vehicles/:id/stop-times', () => {
+  it('checks the next 10 stops and matches this trip by trip_id', async () => {
+    const res = await api(`/api/vehicles/${encodeURIComponent(meta.chosen_vehicle.id)}/stop-times`).res;
+    const body = (await res.json()) as VehicleStopTimes;
+    expect(body.checkedStopIds).toHaveLength(10);
+    expect(body.checkedStopIds[0]).toBe('060035');
+    // Only 060035 has captured arrivals; the other stops answer 404 (no rows) and are left out.
+    expect(body.times).toEqual([{ stopId: '060035', scheduledAt: 1792936080, estimatedAt: 1792935728 }]);
+  });
+  it('404s for a vehicle not in the feed', async () => {
+    expect((await api('/api/vehicles/nope/stop-times').res).status).toBe(404);
   });
 });
 

@@ -2,13 +2,15 @@
 // recentre, dark tiles, vehicle pins, upcoming-stop and countdown markers, clipped route line.
 // Changes: TML data, the Live/Stale source badge on every vehicle, stops inside the radar shown.
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LocateFixed } from 'lucide-react';
 import L from 'leaflet';
 import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 import type { StopLite, Vehicle } from '../../../shared/types';
-import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource } from '@/lib/sourceStatus';
+import { MAP_TILES } from '@/config';
+import { agoLabel, countdownLabel, SOURCE_TEXT, vehicleSource, type SourceState } from '@/lib/sourceStatus';
 import { clipPath, type LatLng, type UpcomingStop } from '@/lib/transit';
 
 const esc = (s: string) => s.replace(/[<>&"']/g, '');
@@ -66,12 +68,13 @@ const stopIcon = L.divIcon({
   html: `<div class="stop-pin in-radar"></div>`,
 });
 
-function upcomingIcon(name: string, label: string | null) {
+function upcomingIcon(name: string, label: string | null, state?: SourceState) {
+  const dot = state ? `<span class="src-dot src-${state} eta-src"></span>` : '';
   return L.divIcon({
     className: '',
     iconSize: [12, 12],
     iconAnchor: [6, 6],
-    html: `<div class="upcoming-stop" title="${esc(name)}">${label ? `<span class="upcoming-eta lift">${esc(label)}</span>` : ''}</div>`,
+    html: `<div class="upcoming-stop" title="${esc(name)}">${label ? `<span class="upcoming-eta lift">${dot}${esc(label)}</span>` : ''}</div>`,
   });
 }
 
@@ -82,31 +85,86 @@ const locateIcon = L.divIcon({
   html: `<div class="locate-dot"></div>`,
 });
 
-function Recenter({ center, radius }: { center: LatLng; radius: number }) {
+/** After this long without touching the map, it glides back to your position. */
+export const RECENTER_IDLE_MS = 20_000;
+
+/**
+ * Keeps the radar circle fitted in view. The radar is drawn in map coordinates, so when you drag the
+ * map it moves with it and you can explore around. While you are exploring, position updates don't
+ * pull the view back; after RECENTER_IDLE_MS without interaction (or on `recenterSignal`) it glides home.
+ */
+function Recenter({
+  center,
+  radius,
+  recenterSignal,
+  onAwayChange,
+}: {
+  center: LatLng;
+  radius: number;
+  recenterSignal: number;
+  onAwayChange: (away: boolean) => void;
+}) {
   const map = useMap();
+  const away = useRef(false);
+  const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const homeRef = useRef<(glide: boolean) => void>(() => {});
+
+  const setAway = useCallback(
+    (v: boolean) => {
+      if (away.current === v) return;
+      away.current = v;
+      onAwayChange(v);
+    },
+    [onAwayChange],
+  );
+
+  // Fit the radar circle snugly inside the sonar screen.
+  homeRef.current = (glide: boolean) => {
+    clearTimeout(idle.current);
+    setAway(false);
+    const bounds = L.latLng(center.lat, center.lng).toBounds(radius * 2);
+    if (glide) map.flyToBounds(bounds, { padding: [28, 28], duration: 1.2 });
+    else map.fitBounds(bounds, { padding: [28, 28], animate: true });
+  };
+
+  // New position or radius: follow it, unless the user is exploring elsewhere.
   useEffect(() => {
-    // Fit the radar circle snugly inside the sonar screen.
-    const home = () =>
-      map.fitBounds(L.latLng(center.lat, center.lng).toBounds(radius * 2), { padding: [28, 28], animate: true });
-    home();
-    // Always spring back to the radar view after the user drags or zooms.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const snapBack = () => {
-      clearTimeout(timer);
-      timer = setTimeout(home, 400);
+    if (!away.current) homeRef.current(false);
+  }, [center.lat, center.lng, radius]);
+
+  // Recenter button.
+  useEffect(() => {
+    if (recenterSignal > 0) homeRef.current(true);
+  }, [recenterSignal]);
+
+  useEffect(() => {
+    const el = map.getContainer();
+    const touched = () => {
+      clearTimeout(idle.current);
+      idle.current = setTimeout(() => homeRef.current(true), RECENTER_IDLE_MS);
     };
-    map.on('dragend', snapBack);
+    const dragged = () => {
+      setAway(true);
+      touched();
+    };
+    map.on('dragstart', dragged);
+    // Any touch/mouse/pen interaction restarts the idle countdown while exploring.
+    const onPointer = () => away.current && touched();
+    el.addEventListener('pointerdown', onPointer);
+    el.addEventListener('pointermove', onPointer, { passive: true });
     const ro = new ResizeObserver(() => {
       map.invalidateSize();
-      home();
+      if (!away.current) homeRef.current(false);
     });
-    ro.observe(map.getContainer());
+    ro.observe(el);
     return () => {
-      clearTimeout(timer);
-      map.off('dragend', snapBack);
+      clearTimeout(idle.current);
+      map.off('dragstart', dragged);
+      el.removeEventListener('pointerdown', onPointer);
+      el.removeEventListener('pointermove', onPointer);
       ro.disconnect();
     };
-  }, [center.lat, center.lng, radius, map]);
+  }, [map, setAway]);
   return null;
 }
 
@@ -130,6 +188,10 @@ interface Props {
   upcoming: UpcomingStop[];
   onSelect: (id: string | null) => void;
   focusStop?: FocusStop | null;
+  selectedStopId: string | null;
+  onSelectStop: (id: string) => void;
+  /** Incremented by the header's recentre button. */
+  recenterRequest: number;
   now: number;
 }
 
@@ -181,9 +243,17 @@ export default function TransitMap({
   upcoming,
   onSelect,
   focusStop,
+  selectedStopId,
+  onSelectStop,
+  recenterRequest,
   now,
 }: Props) {
   const [geo, setGeo] = useState({ x: 0, y: 0, r: 0 });
+  const [away, setAway] = useState(false);
+  const [recenterSignal, setRecenterSignal] = useState(0);
+  useEffect(() => {
+    if (recenterRequest > 0) setRecenterSignal(n => n + 1);
+  }, [recenterRequest]);
   const selected = selectedId ? vehicles.find(v => v.id === selectedId) : undefined;
   const nowSec = Math.floor(now / 1000);
   // Source state changes slowly; re-derive icons every 5 s rather than every tick.
@@ -226,16 +296,18 @@ export default function TransitMap({
         touchZoom={false}
         boxZoom={false}
         keyboard={false}
+        // Leaflet's default fling speed is unlimited: a quick flick could throw the radar far off-screen.
+        inertiaMaxSpeed={1200}
+        inertiaDeceleration={4000}
         attributionControl
         className="h-full w-full"
       >
         <TileLayer
-          className="tiles-dark"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="&copy; OpenStreetMap contributors · Carris Metropolitana"
-          maxZoom={19}
+          url={MAP_TILES.url}
+          attribution={MAP_TILES.attribution}
+          maxZoom={MAP_TILES.maxZoom}
         />
-        <Recenter center={center} radius={radius} />
+        <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
         <GlideGuard />
         <ClearOnMapClick onClear={clear} />
 
@@ -265,25 +337,27 @@ export default function TransitMap({
           stops
             .filter(s => !selectedStopIds.has(s.id))
             .map(s => (
-              <Marker key={s.id} position={[s.lat, s.lng]} icon={stopIcon}>
-                <Popup>
-                  <strong className="font-display">{s.name}</strong>
-                  <div className="text-muted-foreground">Bus stop · {Math.round(s.distance)} m</div>
-                </Popup>
-              </Marker>
+              <Marker
+                key={s.id}
+                position={[s.lat, s.lng]}
+                icon={s.id === selectedStopId ? upcomingIcon(s.name, s.name) : stopIcon}
+                title={`${s.name} · ${Math.round(s.distance)} m`}
+                zIndexOffset={s.id === selectedStopId ? 800 : 0}
+                eventHandlers={{ click: () => onSelectStop(s.id) }}
+              />
             ))}
 
         {upcomingStops.map(u => (
           <Marker
             key={u.key}
             position={[u.lat, u.lng]}
-            icon={upcomingIcon(u.name, u.estimatedAt !== null ? countdownLabel(u.estimatedAt, nowSec, 'live') : null)}
+            icon={upcomingIcon(u.name, countdownLabel(u.atSec, nowSec, u.state), u.state)}
             zIndexOffset={500}
           >
             <Popup>
               <strong className="font-display">{u.name}</strong>
               <div className="text-muted-foreground">
-                {u.estimatedAt !== null ? `Live estimate ${countdownLabel(u.estimatedAt, nowSec, 'live')}` : 'No live time for this stop'}
+                {SOURCE_TEXT[u.state]} · {countdownLabel(u.atSec, nowSec, u.state)}
               </div>
             </Popup>
           </Marker>
@@ -330,6 +404,21 @@ export default function TransitMap({
         style={{ '--x': `${geo.x}px`, '--y': `${geo.y}px`, '--r': `${geo.r}px` } as React.CSSProperties}
         aria-hidden
       />
+      {MAP_TILES.problem && (
+        <p className="pointer-events-none absolute left-1/2 top-2 z-[480] -translate-x-1/2 rounded-lg bg-surface/90 px-2 py-1 text-center text-[10px] text-muted-foreground">
+          {MAP_TILES.problem}
+        </p>
+      )}
+      {away && (
+        <button
+          type="button"
+          onClick={() => setRecenterSignal(n => n + 1)}
+          className="absolute bottom-6 right-3 z-[480] flex items-center gap-1.5 rounded-xl border border-border bg-surface/95 px-3 py-2 font-display text-xs font-bold text-primary shadow-float active:scale-95"
+          aria-label="Recenter the radar on your position"
+        >
+          <LocateFixed className="size-4" /> Recenter
+        </button>
+      )}
     </div>
   );
 }

@@ -66,6 +66,13 @@ vehicle ── vehicle.stop_id ══ exact ══ /stops.id   (357/367; rest "U
 - Coverage in the sample: 32 of 68 departures in the next 60 min (≈ 47 %) had a real-time estimate. Scheduled-only rows are the normal case, not an error.
 - The client must drop past rows. Use the estimate if present, otherwise the scheduled time.
 
+### Times for a selected bus's upcoming stops
+
+`GET /api/vehicles/{id}/stop-times` (ours) takes the bus's route stop sequence from its next stop, fetches `/arrivals/by_stop` for the **next 10 stops**, and keeps the row whose `trip_id` equals the bus's `trip_id` (exact key). The app also uses any board row with the same `trip_id`. Each stop then gets exactly one state:
+- **Live**: the row has `estimated_arrival_unix`.
+- **Scheduled**: the row has only `scheduled_arrival_unix`.
+- **Estimated**: no row (stop further along, or no row returned). Time = last known stop time (or the bus itself, now) + distance along the official shape ÷ the bus's recent speed + 20 s dwell per stop passed. Speed comes from the bus's last GPS fixes, clamped to 8–80 km/h; 20 km/h when unknown (original OV Pulse defaults).
+
 ## 5. Rules for the provider (TML implementation)
 
 1. Use the **v2 JSON API as the single source.** Do not mix in GTFS-zip IDs at runtime (different stop numbers and plans, see below).

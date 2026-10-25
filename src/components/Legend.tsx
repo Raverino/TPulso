@@ -1,6 +1,6 @@
 import { SourceDot } from './SourceDot';
 
-/** Explains the three data-source states (CLAUDE.md display rule). */
+/** Explains the data-source states (CLAUDE.md display rule). */
 export function Legend() {
   return (
     <ul
@@ -17,6 +17,12 @@ export function Legend() {
         <SourceDot state="scheduled" />
         <span>
           <b>Scheduled</b> · ~3 min
+        </span>
+      </li>
+      <li className="flex items-center gap-1.5">
+        <SourceDot state="estimated" />
+        <span>
+          <b>Estimated</b> · ~3 min
         </span>
       </li>
       <li className="flex items-center gap-1.5">

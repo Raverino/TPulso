@@ -1,4 +1,4 @@
-import type { LatLng } from './types';
+import type { LatLng, TransportMode } from './types';
 
 /** Everything region-specific lives here, so another region/operator can be added later. */
 export interface RegionConfig {
@@ -11,6 +11,8 @@ export interface RegionConfig {
   bounds: { south: number; west: number; north: number; east: number };
   radii: readonly number[];
   defaultRadius: number;
+  /** Modes our providers deliver real data for. Other modes are shown in the filter as "no data yet". */
+  modesWithData: readonly TransportMode[];
 }
 
 export const LISBON: RegionConfig = {
@@ -22,6 +24,8 @@ export const LISBON: RegionConfig = {
   bounds: { south: 36.8, west: -9.6, north: 42.2, east: -6.1 },
   radii: [100, 200, 500, 1000],
   defaultRadius: 200,
+  // Carris Metropolitana (TML) runs buses only. Metro, trains and ferries: see docs/OPERATORS.md.
+  modesWithData: ['bus'],
 };
 
 export function isInsideBounds(p: LatLng, b: RegionConfig['bounds']): boolean {

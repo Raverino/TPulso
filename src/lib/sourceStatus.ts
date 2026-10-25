@@ -1,12 +1,13 @@
 // The data-source display rule (CLAUDE.md): every departure and vehicle shows where its data comes from.
 //   live      = real-time (GPS position / real-time estimate)   -> "3 min"
 //   scheduled = timetable only                                  -> "~3 min"
+//   estimated = worked out from route distance and recent speed -> "~3 min" (src/lib/eta.ts)
 //   stale     = real-time data that is too old to trust         -> "last seen X ago"
 //   expected  = estimated position (not used yet)
 
 import type { Departure, Vehicle } from '../../shared/types';
 
-export type SourceState = 'live' | 'scheduled' | 'stale' | 'expected';
+export type SourceState = 'live' | 'scheduled' | 'estimated' | 'stale' | 'expected';
 
 /** A GPS fix older than this is shown as stale. Normal fixes are 30–60 s old (docs/DATA.md). */
 export const VEHICLE_STALE_AFTER_S = 120;
@@ -16,6 +17,7 @@ export const DEPARTURES_STALE_AFTER_S = 90;
 export const SOURCE_TEXT: Record<SourceState, string> = {
   live: 'Live',
   scheduled: 'Scheduled',
+  estimated: 'Estimated',
   stale: 'Stale',
   expected: 'Expected position',
 };
