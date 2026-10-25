@@ -34,6 +34,7 @@ import { useLocation, type TestReason } from "@/lib/useLocation";
 import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
+import { MODE_COLORS, MODE_TEXT } from "@/config";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
 
@@ -157,8 +158,6 @@ export default function App() {
       routeId: String(v.patternId),
       tripId: v.key,
       live: false,
-      color: v.color,
-      textColor: v.textColor,
     }),
     [opName],
   );
@@ -415,7 +414,7 @@ export default function App() {
     for (const id of shownPatterns) {
       const r = id === routeFile.route?.id ? routeFile.route : routeFiles.get(id);
       if (!r) continue;
-      m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id), color: r.color });
+      m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id) });
     }
     return m;
   }, [shownPatterns, routeFiles, routeFile.route, opName]);
@@ -459,14 +458,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExp, routeFile.route, now, center.lat, center.lng, radius]);
 
-  // TPulso: all stops of the selected vehicle in its line colour — passed (dimmed), next (larger, ring) and
+  // TPulso: all stops of the selected vehicle in its mode colour — passed (dimmed), next (larger, ring) and
   // upcoming, with the scheduled countdown for the upcoming stops inside the radar.
   const routeStops: RouteStopMarker[] = useMemo(() => {
     const r = routeFile.route;
     if (!selectedExp || !r || r.id !== selectedExp.patternId) return [];
     const labels = new Map(upcoming.map((u) => [u.key, countdownLabel(nowSec + u.etaS, nowSec, "scheduled")]));
-    const color = selectedExp.color || "";
-    const textColor = selectedExp.textColor || "";
+    const color = MODE_COLORS[selectedExp.mode];
+    const textColor = MODE_TEXT[selectedExp.mode];
     return r.stopInfo.map(([, name, lat, lng], i) => {
       const state = i < selectedExp.nextStopIndex ? "passed" : i === selectedExp.nextStopIndex ? "next" : "upcoming";
       const label = labels.get(`${r.id}-${i}`);
@@ -576,10 +575,20 @@ export default function App() {
                 title={enabled ? label : `${label} · no data yet`}
                 aria-label={enabled ? label : `${label}, no data yet`}
                 className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors ${
-                  filter === key ? "bg-primary text-primary-foreground" : enabled ? "text-foreground/70" : "cursor-not-allowed text-foreground/35"
+                  filter === key ? (key === "all" ? "bg-foreground text-background" : "") : enabled ? "text-foreground/70" : "cursor-not-allowed text-foreground/35"
                 }`}
+                // TPulso: chips use the mode colours (src/config.ts); the active chip is filled with its colour.
+                style={
+                  key !== "all" && filter === key
+                    ? { background: MODE_COLORS[key], color: MODE_TEXT[key] }
+                    : undefined
+                }
               >
-                {Icon ? <Icon className="size-3" /> : <Layers className="size-3" />}
+                {Icon ? (
+                  <Icon className="size-3" style={key !== "all" && filter !== key && enabled ? { color: MODE_COLORS[key] } : undefined} />
+                ) : (
+                  <Layers className="size-3" />
+                )}
                 {enabled ? (
                   <span className="hidden sm:inline">{label}</span>
                 ) : (

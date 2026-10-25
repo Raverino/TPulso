@@ -45,9 +45,6 @@ export interface Vehicle {
   tripId: string;
   /** The operator has no line or route data for this vehicle today. */
   routeUnavailable?: boolean;
-  /** TPulso: official line colour (route_color) and text colour, when the timetable has them. */
-  color?: string;
-  textColor?: string;
 }
 
 export interface Stop {
@@ -135,8 +132,6 @@ export interface TransitRoute {
   cum: number[];
   /** TPulso offline: the route this slice belongs to (several slices per route, one per map area). */
   group?: string;
-  /** TPulso: official line colour, when known (otherwise the mode colour is used). */
-  color?: string;
 }
 
 export function prepareRoute(r: Omit<TransitRoute, 'cum'>): TransitRoute {

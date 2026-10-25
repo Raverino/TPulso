@@ -24,6 +24,7 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
   - Never rely on colour alone (shape, fill, motion and text must also differ). A small on-screen legend explains the states.
 - TEST mode: if the user is outside Portugal (or GPS is denied), use Marquês de Pombal (Metro) P1, Lisboa (38.725878, -9.151315; TML stop 060033) and show a clear "TEST" label in the UI. (Avenida da Liberdade was dropped: it has no TML stops within 500 m — see docs/DATA.md.)
 - Radar radii: 100 m, 200 m, 500 m, 1000 m.
+- Four mode colours only, defined once in `src/config.ts` (MODE_COLORS): Bus yellow, Tram/Metro purple, Train blue, Ferry red. Used for vehicle markers, route lines, station rings, list icons, legend and filter chips. No per-line or per-operator colours. The mode is also shown by its icon. The radar circle and the user dot are neutral light grey, never Train blue.
 - Time zone: Europe/Lisbon.
 - Never commit secrets. `.env` is git-ignored.
 

@@ -40,7 +40,7 @@ export interface MapStation {
   size: number;
 }
 
-/** TPulso: a stop of the selected vehicle, in its line colour. */
+/** TPulso: a stop of the selected vehicle, in its mode colour. */
 export interface RouteStopMarker {
   key: string;
   name: string;
@@ -97,9 +97,7 @@ const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
 function vehicleIcon(v: Vehicle) {
   const unknown = isUnknownRoute(v);
-  const bg = v.color && HEX.test(v.color) ? v.color : "";
-  const fg = v.textColor && HEX.test(v.textColor) ? v.textColor : "";
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${bg}|${fg}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   const icon = L.divIcon({
@@ -107,8 +105,8 @@ function vehicleIcon(v: Vehicle) {
     iconSize: [34, 34],
     iconAnchor: [17, 17],
     // TPulso offline: every vehicle is an Expected position from the timetable (dashed outline + badge).
-    // TPulso: pin in the official line colour (same as its route line and stops), else the mode colour.
-    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}"${bg ? ` style="background:${bg};${fg ? `color:${fg};` : ""}"` : ""}>
+    // TPulso: the pin colour comes only from the mode (src/config.ts MODE_COLORS).
+    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
         <span class="src-dot src-expected pin-src"></span>
         <span style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
         <span>${esc(v.line)}</span>
@@ -162,15 +160,18 @@ const locateIcon = L.divIcon({
   html: `<div class="locate-dot"></div>`,
 });
 
-/** Automatic return to the user's position after this long without touching the map. */
-export const AUTO_RECENTER_MS = 10_000;
+/** Return to the user's position this long after the last drag/zoom/touch ends. */
+export const AUTO_RECENTER_MS = 1_000;
+/** Duration of the return animation (seconds). */
+const RECENTER_ANIM_S = 0.4;
 
 /**
  * TPulso: the radar circle is a screen overlay at the map's centre; the map pans freely under it.
  * - Radius change: zoom so the circle (radius in metres at the map centre) fits on screen.
  * - Drag / pinch / wheel: the map moves; the radar is computed for the new map centre (onCenter).
- * - GPS updates move the map only while the user is not exploring.
- * - Recenter (recenterSignal), or 10 s without touching while autoRecenter is allowed: back to the user.
+ * - 1 s after the interaction ends (incl. the fling), the map glides back to the user (0.4 s), unless a vehicle
+ *   or stop is selected. Any new touch, drag or zoom cancels the timer; it restarts when that interaction ends.
+ * - The Recenter button (recenterSignal) returns immediately.
  */
 function MapController({
   userPos,
@@ -188,14 +189,17 @@ function MapController({
   const map = useMap();
   const latest = useRef({ userPos, radius, autoRecenter, onCenter });
   latest.current = { userPos, radius, autoRecenter, onCenter };
+  /** The user has moved the map away (by hand) since the last return. */
   const exploring = useRef(false);
+  /** A finger or mouse button is down on the map. */
+  const pressed = useRef(false);
   const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const fitAt = useCallback(
     (c: LatLng, glide: boolean) => {
       // toBounds(size) is a square of `size` metres: the circle's diameter.
       const b = L.latLng(c.lat, c.lng).toBounds(latest.current.radius * 2);
-      if (glide) map.flyToBounds(b, { padding: [28, 28], duration: 0.8 });
+      if (glide) map.flyToBounds(b, { padding: [28, 28], duration: RECENTER_ANIM_S });
       else map.fitBounds(b, { padding: [28, 28], animate: true });
     },
     [map],
@@ -208,6 +212,15 @@ function MapController({
     },
     [fitAt],
   );
+  const cancel = useCallback(() => clearTimeout(idle.current), []);
+  /** Start (or restart) the 1 s countdown — only when nothing is pressed and returning is allowed. */
+  const schedule = useCallback(() => {
+    clearTimeout(idle.current);
+    if (pressed.current || !exploring.current) return;
+    idle.current = setTimeout(() => {
+      if (latest.current.autoRecenter && !pressed.current) home(true);
+    }, AUTO_RECENTER_MS);
+  }, [home]);
 
   // Radius change: fit the circle around the point currently under it.
   useEffect(() => {
@@ -217,7 +230,7 @@ function MapController({
   useEffect(() => {
     if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
   }, [userPos.lat, userPos.lng, map]);
-  // Recenter button.
+  // Recenter button: immediately.
   useEffect(() => {
     if (recenterSignal > 0) home(true);
   }, [recenterSignal, home]);
@@ -228,43 +241,68 @@ function MapController({
       const c = map.getCenter();
       latest.current.onCenter({ lat: c.lat, lng: c.lng });
     };
-    // Any touch, drag, wheel or pinch counts as interaction: the user is exploring; restart the idle timer.
-    const touched = () => {
+    // Interaction starts: cancel the countdown.
+    const down = () => {
+      pressed.current = true;
+      cancel();
+    };
+    // Interaction ends (finger/button released): count down — restarted again if a fling is still moving.
+    const up = () => {
+      if (!pressed.current) return;
+      pressed.current = false;
+      schedule();
+    };
+    // Dragging or zooming by hand means the user is exploring.
+    const byHand = () => {
       exploring.current = true;
-      clearTimeout(idle.current);
-      idle.current = setTimeout(() => {
-        if (latest.current.autoRecenter) home(true);
-      }, AUTO_RECENTER_MS);
+      cancel();
+    };
+    // A zoom that starts while a finger is down is a pinch by hand.
+    const pinch = () => {
+      if (pressed.current) byHand();
+    };
+    const wheel = () => {
+      exploring.current = true;
+      schedule(); // each wheel step restarts the countdown
+    };
+    // A move that ends while the user is exploring (e.g. end of the fling or of a pinch) restarts the countdown.
+    const moveEnd = () => {
+      if (exploring.current) schedule();
     };
     map.on("move", report);
-    // Every drag movement and the end of a drag restart the 10 s, so it never snaps back during or right after a drag.
-    map.on("dragstart drag dragend", touched);
-    el.addEventListener("pointerdown", touched);
-    el.addEventListener("wheel", touched, { passive: true });
-    el.addEventListener("touchstart", touched, { passive: true });
+    map.on("dragstart drag", byHand);
+    map.on("zoomstart", pinch);
+    map.on("moveend zoomend", moveEnd);
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("touchstart", down, { passive: true });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("touchend", up);
+    el.addEventListener("wheel", wheel, { passive: true });
     const ro = new ResizeObserver(() => map.invalidateSize());
     ro.observe(el);
     report();
     return () => {
-      clearTimeout(idle.current);
+      cancel();
       map.off("move", report);
-      map.off("dragstart drag dragend", touched);
-      el.removeEventListener("pointerdown", touched);
-      el.removeEventListener("wheel", touched);
-      el.removeEventListener("touchstart", touched);
+      map.off("dragstart drag", byHand);
+      map.off("zoomstart", pinch);
+      map.off("moveend zoomend", moveEnd);
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("touchstart", down);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("touchend", up);
+      el.removeEventListener("wheel", wheel);
       ro.disconnect();
     };
-  }, [map, home]);
+  }, [map, cancel, schedule]);
 
-  // A selected vehicle or stop pauses the automatic return; when it is released, start the 10 s again.
+  // Focus mode (vehicle or stop selected) pauses the return; when released, count down again.
   useEffect(() => {
-    clearTimeout(idle.current);
-    if (autoRecenter && exploring.current) {
-      idle.current = setTimeout(() => {
-        if (latest.current.autoRecenter) home(true);
-      }, AUTO_RECENTER_MS);
-    }
-  }, [autoRecenter, home]);
+    if (autoRecenter) schedule();
+    else cancel();
+  }, [autoRecenter, schedule, cancel]);
   return null;
 }
 
@@ -290,7 +328,7 @@ interface Props {
   /** Live feed refresh in progress: show a charging sweep on the radar. */
   loading?: boolean;
   // TPulso additions
-  /** Stops of the selected vehicle (passed / next / upcoming), in its line colour. */
+  /** Stops of the selected vehicle (passed / next / upcoming), in its mode colour. */
   routeStops: RouteStopMarker[];
   /** Tapping a station opens its departures. */
   onSelectStop: (id: string) => void;
@@ -428,7 +466,7 @@ export default function TransitMap({
         </Popup>
       </Marker>
 
-      {/* TPulso: the selected vehicle's stops in its line colour — passed dimmed, next larger with a ring. */}
+      {/* TPulso: the selected vehicle's stops in its mode colour — passed dimmed, next larger with a ring. */}
       {selectedStops.map((u) => (
         <Marker key={u.key} position={[u.lat, u.lng]} icon={routeStopIcon(u)} zIndexOffset={u.state === "next" ? 600 : u.state === "upcoming" ? 500 : 400}>
           <Popup>
@@ -484,8 +522,8 @@ export default function TransitMap({
         <Polyline
           key={`route-${r.id}`}
           positions={r.path}
-          className={r.color && HEX.test(r.color) ? "route-line" : `route-line route-${r.mode}`}
-          pathOptions={{ weight: selected ? 4 : 3, opacity: selected ? 0.9 : 0.75, color: r.color && HEX.test(r.color) ? r.color : "currentColor", lineCap: "round", lineJoin: "round" }}
+          className={`route-line route-${r.mode}`}
+          pathOptions={{ weight: selected ? 4 : 3, opacity: selected ? 0.9 : 0.75, color: "currentColor", lineCap: "round", lineJoin: "round" }}
           smoothFactor={0}
           interactive={false}
         />

@@ -415,9 +415,10 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
 
         <HelpSection title="Symbols">
           <HelpRow icon={<Bus className="size-4" />} title="Yellow" text="Bus" tone="bg-bus" />
-          <HelpRow icon={<TrainFront className="size-4" />} title="Blue" text="Train" tone="bg-train" />
-          <HelpRow icon={<TramFront className="size-4" />} title="Pink" text="Tram or metro" tone="bg-tram" />
-          <HelpRow icon={<Ship className="size-4" />} title="Cyan" text="Ferry" tone="bg-ferry" />
+          <HelpRow icon={<TramFront className="size-4" />} title="Purple" text="Tram or metro" tone="bg-tram" />
+          <HelpRow icon={<TrainFront className="size-4" />} title="Blue" text="Train (CP, Fertagus)" tone="bg-train" />
+          <HelpRow icon={<Ship className="size-4" />} title="Red" text="Ferry" tone="bg-ferry" />
+          <p className="text-muted-foreground">Each kind of transport always has the same colour and its own symbol. Stations show a ring in the colours of the transport that stops there.</p>
           <HelpRow icon={<MapPin className="size-4" />} title="Countdown marker" text="The stop and time remaining for an opened departure" />
           <HelpRow icon={<Pin className="size-4" />} title="Pin" text="Keep following a connection on the board" />
         </HelpSection>
@@ -468,7 +469,7 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
         </HelpSection>
 
         <HelpSection title="Using the radar">
-          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag or pinch the map to look around: the circle stays in the middle of the screen and shows what is under it ("Exploring here"). Tap Recenter to go back; after 10 seconds without touching it goes back by itself, unless a vehicle or stop is selected. Tap a vehicle for its route and scheduled stops, or a stop for its departures (only the vehicles coming to that stop stay on the map). Tap a departure to show its stop. Tap the map to return to the results.</p>
+          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag or pinch the map to look around: the circle stays in the middle of the screen and shows what is under it ("Exploring here"). Tap Recenter to go back; one second after you stop touching the map it goes back by itself, unless a vehicle or stop is selected. Tap a vehicle for its route and scheduled stops, or a stop for its departures (only the vehicles coming to that stop stay on the map). Tap a departure to show its stop. Tap the map to return to the results.</p>
         </HelpSection>
 
         <button onClick={onClose} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2.5 font-display text-xs font-bold text-primary-foreground">

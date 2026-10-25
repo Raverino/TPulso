@@ -43,3 +43,38 @@ export const MAP_TILES: TileConfig = CARTO_KEY
  * kept and tested but never called while this is false. Turn on with VITE_LIVE=true (and LIVE_ENABLED in wrangler).
  */
 export const LIVE_ENABLED: boolean = import.meta.env.VITE_LIVE === 'true';
+
+/**
+ * The four mode colours — the only colours that mean "which kind of transport", used everywhere (vehicle markers,
+ * route lines, station rings, list icons, legend, filter chips). No per-line or per-operator colours.
+ * Chosen for the dark CARTO map and checked with simulated protanopia, deuteranopia and tritanopia (Machado 2009):
+ * every pair stays at least 23 dE (CIE76) apart, and each is 3.6:1 or more against the map. The mode is also
+ * shown by the icon/glyph, never by colour alone.
+ */
+export const MODE_COLORS = {
+  bus: '#FFCC00', // yellow
+  tram: '#E28FFF', // purple (tram and metro)
+  train: '#1F6FEB', // blue (CP, Fertagus)
+  ferry: '#FF4A3D', // red
+} as const;
+
+/** Text colour on top of each mode colour (best contrast). */
+export const MODE_TEXT = {
+  bus: '#000000',
+  tram: '#000000',
+  train: '#FFFFFF',
+  ferry: '#000000',
+} as const;
+
+/** Radar circle, ticks and the user dot: neutral light grey, so they are never mistaken for Train blue. */
+export const RADAR_COLOR = '#E5E7EB';
+
+/** Publish the colours as CSS variables (--bus, --bus-text, …, --radar) for styles.css and Tailwind classes. */
+export function applyThemeColors(root: HTMLElement = document.documentElement): void {
+  for (const [mode, color] of Object.entries(MODE_COLORS)) {
+    root.style.setProperty(`--${mode}`, color);
+    root.style.setProperty(`--${mode}-text`, MODE_TEXT[mode as keyof typeof MODE_TEXT]);
+  }
+  root.style.setProperty('--radar', RADAR_COLOR);
+  root.style.setProperty('--locate', RADAR_COLOR);
+}
