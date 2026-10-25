@@ -572,3 +572,19 @@
   background: var(--line);
   color: var(--line-text);
 }
+
+/* TPulso: the radar disc is a screen overlay at the map centre (it used to be a Leaflet circle layer).
+ * pointer-events: none, so dragging works everywhere, including inside the circle. */
+.radar-disc {
+  position: absolute;
+  z-index: 449;
+  pointer-events: none;
+  border-radius: 9999px;
+  border: 1.5px dashed oklch(0.68 0.19 258);
+  background: oklch(0.68 0.19 258 / 0.12);
+  animation: sweep 3.4s ease-in-out infinite;
+}
+.sonar-bezel,
+.sonar-bezel::before {
+  pointer-events: none;
+}

@@ -2,7 +2,7 @@
 // are the original's. TPulso offline version: all data comes from the converted timetable files
 // (docs/OFFLINE.md) — Scheduled departures and Expected vehicle positions. No live API is called
 // (the live code is kept behind LIVE_ENABLED, off). Every TPulso change is marked "TPulso:".
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel } from "@/components/transit/ArrivalsDrawer";
@@ -68,8 +68,21 @@ export default function App() {
   // TPulso: GPS with the Marquês de Pombal TEST fallback.
   const { state: loc, locate: relocate } = useLocation(region);
   const gps: "pending" | "granted" | "denied" = loc.mode === "locating" ? "pending" : loc.mode === "gps" ? "granted" : "denied";
-  const center = loc.mode === "locating" ? { lat: region.testLocation.lat, lng: region.testLocation.lng } : loc.position;
+  // The user's position (or the TEST point): the blue dot and where Recenter goes.
+  const userCenter = loc.mode === "locating" ? { lat: region.testLocation.lat, lng: region.testLocation.lng } : loc.position;
   const hasCenter = loc.mode !== "locating";
+  // TPulso: the radar is computed for the map centre (the point under the screen-fixed circle), debounced while
+  // the user pans; it is the user's position until the map reports otherwise.
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null);
+  const centerTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onMapCenter = useCallback((c: { lat: number; lng: number }) => {
+    clearTimeout(centerTimer.current);
+    centerTimer.current = setTimeout(() => setMapCenter(c), 250);
+  }, []);
+  useEffect(() => () => clearTimeout(centerTimer.current), []);
+  const center = hasCenter && mapCenter ? mapCenter : userCenter;
+  const exploringM = Math.round(distanceMeters(center, userCenter));
+  const exploring = exploringM > 25;
   const [testAccepted, setTestAccepted] = useState(false);
   const [recenterRequest, setRecenterRequest] = useState(0);
   const locate = useCallback(() => {
@@ -504,7 +517,13 @@ export default function App() {
             </span>
           </h1>
           <p className="truncate text-[10px] text-muted-foreground">
-            {gps === "pending" ? "Locating you… · " : gps === "granted" ? "" : `TEST location: ${region.testLocation.label} · `}
+            {gps === "pending"
+              ? "Locating you… · "
+              : exploring
+                ? <span className="font-bold text-primary">{`Exploring here · ${exploringM >= 1000 ? `${(exploringM / 1000).toFixed(1)} km` : `${exploringM} m`} from ${gps === "granted" ? "my location" : "the TEST location"} · `}</span>
+                : gps === "granted"
+                  ? "My location · "
+                  : `TEST location: ${region.testLocation.label} · `}
             {manifest ? (
               expired ? (
                 <span className="font-bold text-destructive">timetable expired — connect to update</span>
@@ -596,6 +615,9 @@ export default function App() {
             {hasCenter ? (
               <TransitMap
                 center={center}
+                userPos={userCenter}
+                onMapCenter={onMapCenter}
+                autoRecenter={!selectedId && panelView !== "stop"}
                 hasGps={gps === "granted"}
                 radius={radius}
                 filter={filter}

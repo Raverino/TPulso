@@ -1,7 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
-import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
@@ -162,79 +162,121 @@ const locateIcon = L.divIcon({
   html: `<div class="locate-dot"></div>`,
 });
 
+/** Automatic return to the user's position after this long without touching the map. */
+export const AUTO_RECENTER_MS = 10_000;
+
 /**
- * Keeps the radar circle in view. TPulso changes to the original's Recenter:
- * - every radius change fits the whole circle (with padding), so the radar works at 1000 m too;
- * - the map is anchored to real coordinates: dragging moves the map, circle and user dot stay where they are,
- *   and the map never snaps back by itself;
- * - position updates are followed only while the user is not exploring;
- * - the Recenter button (recenterSignal) returns to the location and re-fits the circle.
+ * TPulso: the radar circle is a screen overlay at the map's centre; the map pans freely under it.
+ * - Radius change: zoom so the circle (radius in metres at the map centre) fits on screen.
+ * - Drag / pinch / wheel: the map moves; the radar is computed for the new map centre (onCenter).
+ * - GPS updates move the map only while the user is not exploring.
+ * - Recenter (recenterSignal), or 10 s without touching while autoRecenter is allowed: back to the user.
  */
-function Recenter({
-  center,
+function MapController({
+  userPos,
   radius,
   recenterSignal,
-  onAwayChange,
+  autoRecenter,
+  onCenter,
 }: {
-  center: LatLng;
+  userPos: LatLng;
   radius: number;
   recenterSignal: number;
-  onAwayChange: (away: boolean) => void;
+  autoRecenter: boolean;
+  onCenter: (c: LatLng) => void;
 }) {
   const map = useMap();
-  const away = useRef(false);
-  const latest = useRef({ center, radius });
-  latest.current = { center, radius };
+  const latest = useRef({ userPos, radius, autoRecenter, onCenter });
+  latest.current = { userPos, radius, autoRecenter, onCenter };
+  const exploring = useRef(false);
+  const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const setAway = useCallback(
-    (v: boolean) => {
-      if (away.current === v) return;
-      away.current = v;
-      onAwayChange(v);
-    },
-    [onAwayChange],
-  );
-  const fit = useCallback(
-    (glide: boolean) => {
-      setAway(false);
-      const { center: c, radius: r } = latest.current;
+  const fitAt = useCallback(
+    (c: LatLng, glide: boolean) => {
       // toBounds(size) is a square of `size` metres: the circle's diameter.
-      const bounds = L.latLng(c.lat, c.lng).toBounds(r * 2);
-      if (glide) map.flyToBounds(bounds, { padding: [28, 28], duration: 0.8 });
-      else map.fitBounds(bounds, { padding: [28, 28], animate: true });
+      const b = L.latLng(c.lat, c.lng).toBounds(latest.current.radius * 2);
+      if (glide) map.flyToBounds(b, { padding: [28, 28], duration: 0.8 });
+      else map.fitBounds(b, { padding: [28, 28], animate: true });
     },
-    [map, setAway],
+    [map],
+  );
+  const home = useCallback(
+    (glide: boolean) => {
+      clearTimeout(idle.current);
+      exploring.current = false;
+      fitAt(latest.current.userPos, glide);
+    },
+    [fitAt],
   );
 
-  // Radius change (and first render): always show the whole circle.
-  useEffect(() => fit(false), [radius, fit]);
-  // New position: follow it, unless the user is looking around elsewhere.
+  // Radius change: fit the circle around the point currently under it.
   useEffect(() => {
-    if (!away.current) fit(false);
-  }, [center.lat, center.lng, fit]);
+    fitAt(exploring.current ? map.getCenter() : latest.current.userPos, false);
+  }, [radius, fitAt, map]);
+  // New GPS position: follow it only while not exploring.
+  useEffect(() => {
+    if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
+  }, [userPos.lat, userPos.lng, map]);
   // Recenter button.
   useEffect(() => {
-    if (recenterSignal > 0) fit(true);
-  }, [recenterSignal, fit]);
+    if (recenterSignal > 0) home(true);
+  }, [recenterSignal, home]);
 
   useEffect(() => {
-    const onDrag = () => setAway(true);
-    map.on("dragstart", onDrag);
-    const ro = new ResizeObserver(() => {
-      map.invalidateSize();
-      if (!away.current) fit(false);
-    });
-    ro.observe(map.getContainer());
+    const el = map.getContainer();
+    const report = () => {
+      const c = map.getCenter();
+      latest.current.onCenter({ lat: c.lat, lng: c.lng });
+    };
+    // Any touch, drag, wheel or pinch counts as interaction: the user is exploring; restart the idle timer.
+    const touched = () => {
+      exploring.current = true;
+      clearTimeout(idle.current);
+      idle.current = setTimeout(() => {
+        if (latest.current.autoRecenter) home(true);
+      }, AUTO_RECENTER_MS);
+    };
+    map.on("move", report);
+    // Every drag movement and the end of a drag restart the 10 s, so it never snaps back during or right after a drag.
+    map.on("dragstart drag dragend", touched);
+    el.addEventListener("pointerdown", touched);
+    el.addEventListener("wheel", touched, { passive: true });
+    el.addEventListener("touchstart", touched, { passive: true });
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(el);
+    report();
     return () => {
-      map.off("dragstart", onDrag);
+      clearTimeout(idle.current);
+      map.off("move", report);
+      map.off("dragstart drag dragend", touched);
+      el.removeEventListener("pointerdown", touched);
+      el.removeEventListener("wheel", touched);
+      el.removeEventListener("touchstart", touched);
       ro.disconnect();
     };
-  }, [map, setAway, fit]);
+  }, [map, home]);
+
+  // A selected vehicle or stop pauses the automatic return; when it is released, start the 10 s again.
+  useEffect(() => {
+    clearTimeout(idle.current);
+    if (autoRecenter && exploring.current) {
+      idle.current = setTimeout(() => {
+        if (latest.current.autoRecenter) home(true);
+      }, AUTO_RECENTER_MS);
+    }
+  }, [autoRecenter, home]);
   return null;
 }
 
 interface Props {
+  /** Radar centre (the map centre, debounced). */
   center: LatLng;
+  /** The user's real position (or the TEST point): the blue dot, and where Recenter goes. */
+  userPos: LatLng;
+  /** Map centre changes (while panning/zooming). */
+  onMapCenter: (c: LatLng) => void;
+  /** Automatic return after 10 s idle is allowed (not while a vehicle or stop is selected). */
+  autoRecenter: boolean;
   hasGps: boolean;
   radius: number;
   filter: FilterMode;
@@ -271,34 +313,31 @@ function ClearOnMapClick({ onClear }: { onClear: () => void }) {
   return null;
 }
 
-function SonarGeometry({
-  center,
-  radius,
-  onChange,
-}: {
-  center: LatLng;
-  radius: number;
-  onChange: (g: { x: number; y: number; r: number }) => void;
-}) {
+/** TPulso: the radar overlay sits at the screen centre; its radius is `radius` metres at the map centre. */
+function SonarGeometry({ radius, onChange }: { radius: number; onChange: (g: { x: number; y: number; r: number }) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
-      const c = L.latLng(center.lat, center.lng);
+      const size = map.getSize();
+      const c = map.getCenter();
       const p = map.latLngToContainerPoint(c);
       const edge = map.latLngToContainerPoint(c.toBounds(radius * 2).getNorthEast());
-      onChange({ x: p.x, y: p.y, r: Math.abs(p.y - edge.y) });
+      onChange({ x: size.x / 2, y: size.y / 2, r: Math.abs(p.y - edge.y) });
     };
     update();
-    map.on("move zoom resize viewreset", update);
+    map.on("move zoom zoomanim resize viewreset", update);
     return () => {
-      map.off("move zoom resize viewreset", update);
+      map.off("move zoom zoomanim resize viewreset", update);
     };
-  }, [map, center.lat, center.lng, radius, onChange]);
+  }, [map, radius, onChange]);
   return null;
 }
 
 export default function TransitMap({
   center,
+  userPos,
+  onMapCenter,
+  autoRecenter,
   hasGps,
   radius,
   filter,
@@ -315,7 +354,8 @@ export default function TransitMap({
   baseLines,
 }: Props) {
   const [geo, setGeo] = useState({ x: 0, y: 0, r: 0 });
-  const [away, setAway] = useState(false);
+  // Recenter shows while the radar centre (map centre) is away from the user.
+  const away = Math.hypot((center.lat - userPos.lat) * 111_320, (center.lng - userPos.lng) * 111_320 * Math.cos((center.lat * Math.PI) / 180)) > 25;
   const [recenterSignal, setRecenterSignal] = useState(0);
   useEffect(() => {
     if (recenterRequest > 0) setRecenterSignal((n) => n + 1);
@@ -358,9 +398,11 @@ export default function TransitMap({
       center={[center.lat, center.lng]}
       zoom={16}
       zoomControl={false}
-      scrollWheelZoom={false}
+      // TPulso: the map pans and zooms freely under the screen-fixed radar.
+      scrollWheelZoom={true}
       doubleClickZoom={false}
-      touchZoom={false}
+      touchZoom={true}
+      dragging={true}
       boxZoom={false}
       keyboard={false}
       // TPulso: Leaflet's default fling speed is unlimited; a quick flick could throw the radar off-screen.
@@ -371,30 +413,17 @@ export default function TransitMap({
     >
       {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
       <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} className={MAP_TILES.className} />
-      <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
+      <MapController userPos={userPos} radius={radius} recenterSignal={recenterSignal} autoRecenter={autoRecenter} onCenter={onMapCenter} />
       <GlideGuard />
       <ClearOnMapClick onClear={clear} />
       <ZoomWatch onZoom={setZoom} />
 
 
-      <Circle
-        center={[center.lat, center.lng]}
-        radius={radius}
-        className="radar-ring"
-        pathOptions={{
-          color: "oklch(0.68 0.19 258)",
-          weight: 1.5,
-          fillColor: "oklch(0.68 0.19 258)",
-          fillOpacity: 0.12,
-          dashArray: "6 6",
-        }}
-      />
-
-      <Marker position={[center.lat, center.lng]} icon={locateIcon} zIndexOffset={1000}>
+      <Marker position={[userPos.lat, userPos.lng]} icon={locateIcon} zIndexOffset={1000}>
         <Popup>
           <strong className="font-display">{hasGps ? "You are here" : "TEST location"}</strong>
           <div className="text-muted-foreground">
-            {hasGps ? `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}` : "Not your real position"}
+            {hasGps ? `${userPos.lat.toFixed(5)}, ${userPos.lng.toFixed(5)}` : "Not your real position"}
           </div>
         </Popup>
       </Marker>
@@ -441,6 +470,16 @@ export default function TransitMap({
           interactive={false}
         />
       ))}
+      {/* Dark outline under each line so every line colour (e.g. grey Carris lines) stays readable on the map. */}
+      {activeRoutes.map((r) => (
+        <Polyline
+          key={`casing-${r.id}`}
+          positions={r.path}
+          pathOptions={{ weight: selected ? 8 : 6, opacity: 0.7, color: "#0b0f19", lineCap: "round", lineJoin: "round" }}
+          smoothFactor={0}
+          interactive={false}
+        />
+      ))}
       {activeRoutes.map((r) => (
         <Polyline
           key={`route-${r.id}`}
@@ -467,8 +506,14 @@ export default function TransitMap({
           </Marker>
         );
       })}
-      <SonarGeometry center={center} radius={radius} onChange={setGeo} />
+      <SonarGeometry radius={radius} onChange={setGeo} />
     </MapContainer>
+      {/* TPulso: the radar disc and bezel are a screen overlay; they never capture drags or taps. */}
+      <div
+        className="radar-disc"
+        style={{ left: geo.x - geo.r, top: geo.y - geo.r, width: geo.r * 2, height: geo.r * 2 }}
+        aria-hidden
+      />
       <div
         className="sonar-bezel"
         style={{ "--x": `${geo.x}px`, "--y": `${geo.y}px`, "--r": `${geo.r}px` } as React.CSSProperties}
