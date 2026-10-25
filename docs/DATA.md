@@ -72,7 +72,7 @@ vehicle ── vehicle.stop_id ══ exact ══ /stops.id   (357/367; rest "U
 2. Keep **one** tested function, `stripNamespace(id)`, that removes leading `[XXXXX]` groups. Use it only for the two missing links in §3, never on names. *(Approved by the owner 2026-10-25.)*
 3. `stopsNear`: the API cannot query by location. Our server fetches the 6.8 MB `/stops` list and serves a **trimmed, compressed list** (`id`, `name`, `lat`, `lng` only; stops without any line left out). The phone caches it (IndexedDB), refreshes it about once a day, and filters by radius locally. The phone never downloads the raw `/stops` list or the 78 MB GTFS zip.
 6. Departures from `/arrivals/by_stop` can include **city Carris** lines (agency `IA9T6`, e.g. lines 702, 711, 748 at stop 060035). They are not in `/lines` and are out of scope: departures whose line is not in `/lines` are left out.
-4. Ignore `vehicle.stop_id === "UNAVAILABLE_STOP_ID"`. The capacity fields are 0 and make/model are null: do not show them.
+4. Drop vehicles reported at `lat 0, lon 0` (no GPS fix; 1 of 367 in the fixture). Ignore `vehicle.stop_id === "UNAVAILABLE_STOP_ID"`. The capacity fields are 0 and make/model are null: do not show them.
 5. Vehicle ID `[AGENCY]number` is stable and unique (0 duplicates). Keep it as the internal vehicle key for the later share feature.
 
 ## 6. Mismatches with BRIEF.md / CLAUDE.md
@@ -85,4 +85,5 @@ vehicle ── vehicle.stop_id ══ exact ══ /stops.id   (357/367; rest "U
 6. **Real-time is partial** (~47 % of near-term departures in the sample). The UI must treat scheduled-only as normal.
 7. **No geo query for stops.** Solved with a trimmed stop list from our server, cached on the phone (§5 rule 3).
 9. **City Carris shows up in TML departures** (§5 rule 6). Filtered out for the MVP.
+10. **No current route data for agency A2L1N (44, Setúbal peninsula, ~20 % of buses).** On 2026-10-25 `/v2/patterns` only has versions for Aug 2026 (plan `F1M13`) and Jan–Apr 2027 (`G8DDS`); the current plan (`ZLLEW`, 2026-10-01 → 11-30) exists only in the GTFS zip. Agencies 41/42/43 were fine (8/8 sampled each). Departures for agency-44 stops are **not** affected. Effect: tapping an agency-44 bus shows its line but no destination and no route line ("not available"). Options: wait for TML to fix the API, use the nearest other version's shape (may be wrong), or build a trip → shape index from the GTFS zip at build time.
 8. **No documented rate limit and no key.** Easier than assumed, but no guarantees.

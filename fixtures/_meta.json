@@ -70,6 +70,11 @@
    "cache_control": "public, max-age=3600",
    "items_in_response": 5,
    "items_saved": 5
+  },
+  "stops.unserved-sample.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/stops",
+   "status": 200,
+   "note": "First 5 unmodified records from /v2/stops (captured 2026-10-25T13:37Z) that have no line_ids, i.e. no service."
   }
  },
  "chosen_vehicle": {
