@@ -6,7 +6,6 @@ import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
 import {
-  clipRoute,
   isUnknownRoute,
   type TransitRoute,
   type FilterMode,
@@ -101,13 +100,13 @@ const locateIcon = L.divIcon({
   html: `<div class="locate-dot"></div>`,
 });
 
-/** TPulso: after this long without touching the map, it glides back to your position. */
-export const RECENTER_IDLE_MS = 20_000;
-
 /**
- * Fits the radar circle in view. TPulso change: the radar is drawn in map coordinates, so dragging moves
- * it with the map (explore around) instead of the original's snap-back after 0.4 s. Position updates don't
- * pull the view back while exploring; it glides home after RECENTER_IDLE_MS idle or on `recenterSignal`.
+ * Keeps the radar circle in view. TPulso changes to the original's Recenter:
+ * - every radius change fits the whole circle (with padding), so the radar works at 1000 m too;
+ * - the map is anchored to real coordinates: dragging moves the map, circle and user dot stay where they are,
+ *   and the map never snaps back by itself;
+ * - position updates are followed only while the user is not exploring;
+ * - the Recenter button (recenterSignal) returns to the location and re-fits the circle.
  */
 function Recenter({
   center,
@@ -122,8 +121,8 @@ function Recenter({
 }) {
   const map = useMap();
   const away = useRef(false);
-  const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const homeRef = useRef<(glide: boolean) => void>(() => {});
+  const latest = useRef({ center, radius });
+  latest.current = { center, radius };
 
   const setAway = useCallback(
     (v: boolean) => {
@@ -133,51 +132,42 @@ function Recenter({
     },
     [onAwayChange],
   );
+  const fit = useCallback(
+    (glide: boolean) => {
+      setAway(false);
+      const { center: c, radius: r } = latest.current;
+      // toBounds(size) is a square of `size` metres: the circle's diameter.
+      const bounds = L.latLng(c.lat, c.lng).toBounds(r * 2);
+      if (glide) map.flyToBounds(bounds, { padding: [28, 28], duration: 0.8 });
+      else map.fitBounds(bounds, { padding: [28, 28], animate: true });
+    },
+    [map, setAway],
+  );
 
-  // Fit the radar circle snugly inside the sonar screen.
-  homeRef.current = (glide: boolean) => {
-    clearTimeout(idle.current);
-    setAway(false);
-    const bounds = L.latLng(center.lat, center.lng).toBounds(radius * 2);
-    if (glide) map.flyToBounds(bounds, { padding: [28, 28], duration: 1.2 });
-    else map.fitBounds(bounds, { padding: [28, 28], animate: true });
-  };
+  // Radius change (and first render): always show the whole circle.
+  useEffect(() => fit(false), [radius, fit]);
+  // New position: follow it, unless the user is looking around elsewhere.
+  useEffect(() => {
+    if (!away.current) fit(false);
+  }, [center.lat, center.lng, fit]);
+  // Recenter button.
+  useEffect(() => {
+    if (recenterSignal > 0) fit(true);
+  }, [recenterSignal, fit]);
 
   useEffect(() => {
-    if (!away.current) homeRef.current(false);
-  }, [center.lat, center.lng, radius]);
-
-  useEffect(() => {
-    if (recenterSignal > 0) homeRef.current(true);
-  }, [recenterSignal]);
-
-  useEffect(() => {
-    const el = map.getContainer();
-    const touched = () => {
-      clearTimeout(idle.current);
-      idle.current = setTimeout(() => homeRef.current(true), RECENTER_IDLE_MS);
-    };
-    const dragged = () => {
-      setAway(true);
-      touched();
-    };
-    map.on("dragstart", dragged);
-    const onPointer = () => away.current && touched();
-    el.addEventListener("pointerdown", onPointer);
-    el.addEventListener("pointermove", onPointer, { passive: true });
+    const onDrag = () => setAway(true);
+    map.on("dragstart", onDrag);
     const ro = new ResizeObserver(() => {
       map.invalidateSize();
-      if (!away.current) homeRef.current(false);
+      if (!away.current) fit(false);
     });
-    ro.observe(el);
+    ro.observe(map.getContainer());
     return () => {
-      clearTimeout(idle.current);
-      map.off("dragstart", dragged);
-      el.removeEventListener("pointerdown", onPointer);
-      el.removeEventListener("pointermove", onPointer);
+      map.off("dragstart", onDrag);
       ro.disconnect();
     };
-  }, [map, setAway]);
+  }, [map, setAway, fit]);
   return null;
 }
 
@@ -202,6 +192,8 @@ interface Props {
   selectedStopId: string | null;
   /** Incremented by the top bar's recentre button. */
   recenterRequest: number;
+  /** TPulso: tram, metro, train and ferry lines of the region, drawn at every radius. */
+  baseLines: TransitRoute[];
   now: number;
 }
 
@@ -257,6 +249,7 @@ export default function TransitMap({
   onSelectStop,
   selectedStopId,
   recenterRequest,
+  baseLines,
   now,
 }: Props) {
   const [geo, setGeo] = useState({ x: 0, y: 0, r: 0 });
@@ -382,17 +375,27 @@ export default function TransitMap({
         />
       ))}
 
-      {activeRoutes.map((r) =>
-        clipRoute(r, center, radius).map((seg, i) => (
-          <Polyline
-            key={`route-${r.id}-${i}-${radius}`}
-            positions={seg}
-            className={`route-line route-${r.mode}`}
-            pathOptions={{ weight: 3, opacity: 0.6, color: "currentColor" }}
-            interactive={false}
-          />
-        )),
-      )}
+      {/* TPulso: whole lines (first stop to terminus), never clipped to the radar or to map areas. */}
+      {baseLines.map((r) => (
+        <Polyline
+          key={`base-${r.id}`}
+          positions={r.path}
+          className={`route-line route-${r.mode}`}
+          pathOptions={{ weight: 2.5, opacity: 0.35, color: "currentColor", lineCap: "round", lineJoin: "round" }}
+          smoothFactor={0}
+          interactive={false}
+        />
+      ))}
+      {activeRoutes.map((r) => (
+        <Polyline
+          key={`route-${r.id}`}
+          positions={r.path}
+          className={`route-line route-${r.mode}`}
+          pathOptions={{ weight: 3, opacity: 0.75, color: "currentColor", lineCap: "round", lineJoin: "round" }}
+          smoothFactor={0}
+          interactive={false}
+        />
+      ))}
 
       {visibleVehicles.map((v) => {
         return (

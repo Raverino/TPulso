@@ -468,7 +468,7 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
         </HelpSection>
 
         <HelpSection title="Using the radar">
-          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag the map to look around; it returns to you after 20 seconds, or tap Recenter. Tap a vehicle for its route and scheduled stops, a stop for its departures, or a departure to show its stop. Tap the map to return to the results.</p>
+          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag the map to look around; the circle stays at your position. Tap Recenter to go back. Tap a vehicle for its route and scheduled stops, or a stop for its departures (only the vehicles coming to that stop stay on the map). Tap a departure to show its stop. Tap the map to return to the results.</p>
         </HelpSection>
 
         <button onClick={onClose} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2.5 font-display text-xs font-bold text-primary-foreground">
@@ -660,8 +660,17 @@ function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: 
         ) : s.departures.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-muted-foreground">No departures in the next 10 minutes.</p>
         ) : (
+          <div className="space-y-3">
+            {(["bus", "tram", "train", "ferry"] as const).map((mode) => {
+              const rows = s.departures!.filter((d) => d.mode === mode);
+              if (!rows.length) return null;
+              return (
+                <section key={mode}>
+                  <h3 className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                    {MODE_LABEL[mode]} · {rows.length}
+                  </h3>
           <ul className="space-y-1">
-            {s.departures.map((d) => {
+            {rows.map((d) => {
               const Icon = ICONS[d.mode];
               const state = depState(d.realtime, ageSec);
               return (
@@ -686,6 +695,10 @@ function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: 
               );
             })}
           </ul>
+                </section>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

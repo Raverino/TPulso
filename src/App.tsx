@@ -25,12 +25,12 @@ import {
 // TPulso: offline timetable data layer, region config and display rule.
 import { LISBON } from "../shared/region";
 import { withinRadius } from "../shared/geo";
-import { addDays, decodePolyline, type RouteFile } from "../shared/timetable";
+import { addDays, decodePolyline, type LineShape, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
 import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ScheduledDeparture } from "@/offline/engine";
-import { downloadRegion, loadRoute, regionBytes } from "@/offline/store";
+import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
@@ -250,12 +250,11 @@ export default function App() {
     [board, pin],
   );
 
-  const visibleVehicles = useMemo(
+  const radarVehicles = useMemo(
     () => vehicles.filter((v) => (filter === "all" || v.mode === filter) && isInside(v, center, radius)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [vehicles, filter, center.lat, center.lng, radius],
   );
-  const inRange = visibleVehicles.length;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -273,6 +272,40 @@ export default function App() {
     setOpenId(null);
     setPanelView(view);
   }, []);
+  // TPulso: tapping a stop shows its departures in the next 10 minutes.
+  const tappedStop = selectedStopId ? nearStops.find((s) => s.id === selectedStopId) : undefined;
+  const stopPanel: StopPanel | null = useMemo(() => {
+    if (!tappedStop || !manifest) return null;
+    const rows = expired ? [] : departuresAtStop(manifest, tt.areas, tappedStop.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, tappedStop));
+    return { id: tappedStop.id, name: tappedStop.name, distanceM: Math.round(tappedStop.distance), departures: rows, fetchedAt: now, error: null };
+  }, [tappedStop, manifest, expired, tt.areas, now, toLive]);
+  const selectStop = useCallback(
+    (id: string) => {
+      setSelectedId(null);
+      setOpenId(null);
+      if (panelView === "stop" && selectedStopId === id) {
+        setPanelView("results");
+        setSelectedStopId(null);
+      } else {
+        setSelectedStopId(id);
+        setPanelView("stop");
+      }
+    },
+    [panelView, selectedStopId],
+  );
+
+  // TPulso: while a stop is open, show only the vehicles whose trip passes that stop in the next 10 minutes
+  // (exact trip key), wherever they are now; all others are hidden. Closing the panel restores them.
+  const stopTripKeys = useMemo(
+    () => (panelView === "stop" && stopPanel?.departures ? new Set(stopPanel.departures.map((d) => d.vehicleKey)) : null),
+    [panelView, stopPanel],
+  );
+  const visibleVehicles = useMemo(
+    () => (stopTripKeys ? vehicles.filter((v) => stopTripKeys.has(v.tripId)) : radarVehicles),
+    [stopTripKeys, vehicles, radarVehicles],
+  );
+  const inRange = radarVehicles.length;
+
   const focusStop = useMemo(() => {
     const d = openId ? board?.find((x) => x.id === openId) : undefined;
     if (!d) return null;
@@ -304,24 +337,53 @@ export default function App() {
     };
   }, [manifest, selectedPattern]);
 
-  // Route lines: slices from the loaded areas for vehicles on the radar, the full route for the selected one.
+  // TPulso: whole route lines (first stop to terminus) from the route files, for every vehicle shown and the
+  // selected one — independent of the radar radius and of which map areas are loaded.
+  const [routeFiles, setRouteFiles] = useState<Map<number, RouteFile>>(new Map());
+  const shownPatterns = useMemo(() => [...new Set([...visibleVehicles.map((v) => Number(v.routeId)), ...(selectedPattern !== undefined ? [selectedPattern] : [])])], [visibleVehicles, selectedPattern]);
+  useEffect(() => {
+    if (!manifest) return;
+    let stop = false;
+    for (const id of shownPatterns) {
+      if (routeFiles.has(id)) continue;
+      loadRoute(manifest, id)
+        .then((r) => !stop && setRouteFiles((m) => (m.has(id) ? m : new Map(m).set(id, r))))
+        .catch(() => {
+          /* a missing line is simply not drawn; the vehicle still shows */
+        });
+    }
+    return () => {
+      stop = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifest, shownPatterns.join(",")]);
   const routes = useMemo(() => {
     const m = new Map<string, TransitRoute>();
-    const wanted = new Set(visibleVehicles.map((v) => v.routeId));
-    for (const a of tt.areas) {
-      for (const p of a.patterns) {
-        if (!wanted.has(String(p.id))) continue;
-        const id = `${p.id}|${a.area}`;
-        if (!m.has(id)) m.set(id, { ...prepareRoute({ id, mode: p.mode, line: p.line, headsign: p.headsign, operator: opName.get(p.op) ?? p.op, path: decodePolyline(p.shape) }), group: String(p.id) });
-      }
-    }
-    if (routeFile.route) {
-      const r = routeFile.route;
+    for (const id of shownPatterns) {
+      const r = id === routeFile.route?.id ? routeFile.route : routeFiles.get(id);
+      if (!r) continue;
       m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id) });
     }
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tt.areas, visibleVehicles.map((v) => v.routeId).join(","), routeFile.route, opName]);
+  }, [shownPatterns, routeFiles, routeFile.route, opName]);
+
+  // TPulso: tram, metro, train and ferry lines of the whole region, visible at every radius (lines.json).
+  const [lineShapes, setLineShapes] = useState<LineShape[]>([]);
+  useEffect(() => {
+    if (!manifest) return;
+    let stop = false;
+    loadLines(manifest)
+      .then((f) => !stop && setLineShapes(f.lines))
+      .catch(() => !stop && setLineShapes([]));
+    return () => {
+      stop = true;
+    };
+  }, [manifest]);
+  const allBaseLines = useMemo(
+    () => lineShapes.map((l) => prepareRoute({ id: `line|${l.id}`, mode: l.mode, line: l.line, headsign: "", operator: "", path: decodePolyline(l.shape) })),
+    [lineShapes],
+  );
+  const baseLines = useMemo(() => (filter === "all" ? allBaseLines : allBaseLines.filter((l) => l.mode === filter)), [allBaseLines, filter]);
   const selectedRoute = selected ? routes.get(`full|${selected.routeId}`) : undefined;
 
   const { upcoming, beyond } = useMemo(() => {
@@ -344,27 +406,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExp, routeFile.route, now, center.lat, center.lng, radius]);
 
-  // TPulso: tapping a stop shows its departures in the next 10 minutes.
-  const tappedStop = selectedStopId ? nearStops.find((s) => s.id === selectedStopId) : undefined;
-  const stopPanel: StopPanel | null = useMemo(() => {
-    if (!tappedStop || !manifest) return null;
-    const rows = expired ? [] : departuresAtStop(manifest, tt.areas, tappedStop.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, tappedStop));
-    return { id: tappedStop.id, name: tappedStop.name, distanceM: Math.round(tappedStop.distance), departures: rows, fetchedAt: now, error: null };
-  }, [tappedStop, manifest, expired, tt.areas, now, toLive]);
-  const selectStop = useCallback(
-    (id: string) => {
-      setSelectedId(null);
-      setOpenId(null);
-      if (panelView === "stop" && selectedStopId === id) {
-        setPanelView("results");
-        setSelectedStopId(null);
-      } else {
-        setSelectedStopId(id);
-        setPanelView("stop");
-      }
-    },
-    [panelView, selectedStopId],
-  );
+
 
   // TPulso: Help shows the timetable's dates per operator and offers to save the whole region.
   const [dl, setDl] = useState<HelpInfo["download"]>({ state: "idle", done: 0, total: 0 });
@@ -511,6 +553,7 @@ export default function App() {
                 onSelectStop={selectStop}
                 selectedStopId={panelView === "stop" ? selectedStopId : null}
                 recenterRequest={recenterRequest}
+                baseLines={baseLines}
                 now={now}
                 onSelect={(id) => {
                   // Empty-radar tap or re-tapping the selected vehicle: reset everything.
@@ -602,9 +645,9 @@ export default function App() {
           followed={followed}
           onPin={pinArrival}
           onUnpin={() => pin(null)}
-          canSelect={(id) => visibleVehicles.some((v) => v.id === id)}
+          canSelect={(id) => radarVehicles.some((v) => v.id === id)}
           openId={openId}
-          radarVehicles={visibleVehicles
+          radarVehicles={radarVehicles
             .map((v) => ({ id: v.id, line: v.line, mode: v.mode, headsign: v.headsign, distanceM: Math.round(distanceMeters(v, center)) }))
             .sort((a, b) => a.distanceM - b.distanceM)}
           onOpen={setOpenId}

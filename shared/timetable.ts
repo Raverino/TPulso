@@ -56,6 +56,25 @@ export interface Manifest {
   area: { latDeg: number; lngDeg: number };
   /** Area key -> compressed (gzip) file size in bytes. */
   areas: Record<string, number>;
+  /** Region-wide line shapes for tram, metro, train and ferry (lines.json), compressed size. */
+  lines: { file: string; bytes: number };
+}
+
+/** One line shape of a non-bus mode, drawn at every radius (lines.json). */
+export interface LineShape {
+  /** Pattern id (route file routes/<id>.json). */
+  id: number;
+  line: string;
+  mode: TransportMode;
+  color: string;
+  /** Encoded polyline, first stop to terminus. */
+  shape: string;
+}
+
+export interface LinesFile {
+  format: 1;
+  version: string;
+  lines: LineShape[];
 }
 
 /** [stop id, name, lat, lng] */

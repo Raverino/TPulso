@@ -107,6 +107,44 @@ describe('geometry', () => {
     expect(d[0]).toBe(0);
     expect(d[2]).toBeGreaterThan(d[1]!);
   });
+  it('keeps the drawn line within 2.5 m of every raw shape point (curves are not cut)', async () => {
+    const res = await resP;
+    const route = [...res.routes.values()].find(r => r.line === '3715')!;
+    const raw: [number, number, number][] = [];
+    for await (const r of src('shapes.txt')) if (r.shape_id === '[PL3CL][YA15B]3715_0_1') raw.push([+r.shape_pt_sequence!, +r.shape_pt_lat!, +r.shape_pt_lon!]);
+    raw.sort((a, b) => a[0] - b[0]);
+    const line = decodePolyline(route.shape);
+    const k = Math.cos((38.7 * Math.PI) / 180);
+    const segDist = (p: [number, number], a: [number, number], b: [number, number]) => {
+      const ax = a[1] * k * 111_320, ay = a[0] * 111_320, bx = b[1] * k * 111_320, by = b[0] * 111_320, px = p[1] * k * 111_320, py = p[0] * 111_320;
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+      const t = L ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L)) : 0;
+      return Math.hypot(ax + dx * t - px, ay + dy * t - py);
+    };
+    // Only points between the first and last stop (the drawn line runs first stop -> terminus).
+    const first = route.stopInfo[0]!, last = route.stopInfo.at(-1)!;
+    const near = (p: [number, number], s: readonly [string, string, number, number]) => Math.hypot((p[0] - s[2]) * 111_320, (p[1] - s[3]) * 111_320 * k);
+    const i0 = raw.findIndex(p => near([p[1], p[2]], first) < 40);
+    let i1 = raw.length - 1;
+    while (i1 > 0 && near([raw[i1]![1], raw[i1]![2]], last) > 40) i1--;
+    let worst = 0;
+    let worstAt: [number, number] = [0, 0];
+    for (const [, la, lg] of raw.slice(Math.max(0, i0), i1 + 1)) {
+      // The line starts and ends exactly at the stops; raw points just before/after them are not part of it.
+      if (near([la, lg], first) < 30 || near([la, lg], last) < 30) continue;
+      let best = Infinity;
+      for (let i = 0; i < line.length - 1; i++) best = Math.min(best, segDist([la, lg], line[i]!, line[i + 1]!));
+      if (best > worst) { worst = best; worstAt = [la, lg]; }
+    }
+    expect(worst, `at ${worstAt}`).toBeLessThan(2.5);
+  });
+  it('writes region-wide line shapes for tram, metro, train and ferry only, first stop to terminus', async () => {
+    const res = await resP;
+    expect(res.lines.length).toBeGreaterThan(0);
+    for (const l of res.lines) expect(l.mode).not.toBe('bus');
+    expect(new Set(res.lines.map(l => l.mode))).toEqual(new Set(['tram', 'ferry']));
+    for (const l of res.lines) expect(l.shape).toBe(res.routes.get(l.id)!.shape);
+  });
   it('round-trips polylines', () => {
     const pts: [number, number][] = [[38.72588, -9.15132], [38.7259, -9.1514]];
     expect(decodePolyline(encodePolyline(pts))).toEqual(pts);

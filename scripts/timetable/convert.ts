@@ -6,6 +6,7 @@ import {
   encodePolyline,
   modeOfRouteType,
   type AreaFile,
+  type LineShape,
   type OperatorInfo,
   type PatternData,
   type RouteFile,
@@ -31,6 +32,8 @@ export interface ConvertResult {
   excluded: { id: string; name: string; reason: string }[];
   areas: Map<string, AreaFile>;
   routes: Map<number, RouteFile>;
+  /** Tram, metro, train and ferry line shapes for the whole region (identical shapes merged). */
+  lines: LineShape[];
   feed: { version: string; publisher: string };
   stats: { tripsInWindow: number; duplicateTrips: number; sameDayDuplicates: Record<string, number>; stopTimes: number; patterns: number; stops: number; shapePointsRaw: number; shapePointsKept: number };
 }
@@ -157,7 +160,8 @@ export function sliceShape(shape: [number, number][], cum: number[], d0: number,
 }
 
 export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<ConvertResult> {
-  const tol = opt.shapeToleranceM ?? 5;
+  // 1.5 m keeps curves such as the Marquês de Pombal roundabout (5 m cut its corners).
+  const tol = opt.shapeToleranceM ?? 1.5;
   const opOfAgency = new Map<string, OperatorConfig>();
   for (const o of opt.operators) for (const a of o.agencies) opOfAgency.set(a, o);
 
@@ -306,6 +310,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
   // Build route files and area files
   const areas = new Map<string, AreaFile>();
   const routesOut = new Map<number, RouteFile>();
+  const lines = new Map<string, LineShape>();
   const area = (k: string) => {
     let a = areas.get(k);
     if (!a) areas.set(k, (a = { format: 1, version: opt.version, area: k, stops: [], patterns: [] }));
@@ -326,11 +331,13 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
       id: p.id, line: r.line, color: r.color, textColor: r.text, mode: r.mode, op: r.op.id, headsign: p.headsign,
       total: p.stops.length, trips: p.trips,
     };
+    const fullShape = encodePolyline(sliceShape(shape, cum, dist[0]!, dist[dist.length - 1]!));
+    if (r.mode !== 'bus' && !lines.has(fullShape)) lines.set(fullShape, { id: p.id, line: r.line, mode: r.mode, color: r.color, shape: fullShape });
     routesOut.set(p.id, {
       format: 1, version: opt.version, ...base, first: 0,
       // The shape is cut at the first stop, so distances are counted from there.
       stops: p.stops.map(si => stopIds[si]!), dist: dist.map(d => d - dist[0]!),
-      shape: encodePolyline(sliceShape(shape, cum, dist[0]!, dist[dist.length - 1]!)),
+      shape: fullShape,
       profiles, stopInfo: p.stops.map(si => stopInfo[si]!),
     });
     // Area slices: stops in the area plus one neighbour on each side.
@@ -362,7 +369,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
   for (const o of operators) o.modes = [...(opModes.get(o.id) ?? [])].sort();
 
   return {
-    operators, excluded, areas, routes: routesOut, feed,
+    operators, excluded, areas, routes: routesOut, lines: [...lines.values()], feed,
     stats: {
       tripsInWindow: [...patterns.values()].reduce((s, p) => s + p.trips.length, 0),
       duplicateTrips,

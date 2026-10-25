@@ -103,11 +103,14 @@ async function main() {
     if (json.length > 2_000_000) problems.push(`area ${k} is ${mb(json.length)} (limit 2 MB)`);
   }
   for (const [id, r] of res.routes) files.push({ rel: `routes/${id}.json`, json: JSON.stringify(r) });
+  const linesJson = JSON.stringify({ format: 1, version, lines: res.lines });
+  files.push({ rel: 'lines.json', json: linesJson });
   const manifest: Manifest = {
     format: 1, version, generatedAt: new Date().toISOString(), timezone: 'Europe/Lisbon',
     feed: { url: TML_FEED_URL, version: res.feed.version, publisher: res.feed.publisher },
     window: { first: today, days }, operators, excluded: res.excluded,
     area: { latDeg: 0.02, lngDeg: 0.025 }, areas: areaSizes,
+    lines: { file: 'lines.json', bytes: zlib.gzipSync(linesJson).length },
   };
   files.push({ rel: 'manifest.json', json: JSON.stringify(manifest) });
 
@@ -152,7 +155,7 @@ async function main() {
   }
   log('\n  Excluded:');
   for (const e of res.excluded) log(`  - ${e.name}: ${e.reason}`);
-  log(`\n  Files: ${files.length} (${res.areas.size} areas, ${res.routes.size} routes, manifest)`);
+  log(`\n  Files: ${files.length} (${res.areas.size} areas, ${res.routes.size} routes, lines.json with ${res.lines.length} tram/metro/train/ferry shapes ${kb(manifest.lines.bytes)} gzip, manifest)`);
   log(`  Size: ${mb(raw)} raw, ${mb(gz)} gzip total · areas ${mb(areaGz.reduce((s, x) => s + x, 0))} gzip (median ${kb(q(0.5))}, 90% ≤ ${kb(q(0.9))}, max ${kb(areaGz[areaGz.length - 1]!)}) · routes ${mb(routeGz)} gzip`);
   log(`  Time ${((Date.now() - t0) / 1000).toFixed(0)} s · peak memory ${mb(Math.max(peakRss, process.resourceUsage().maxRSS * 1024))}`);
 }

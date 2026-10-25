@@ -1,7 +1,7 @@
 // Loads the offline timetable files (docs/OFFLINE.md): current.json -> manifest -> areas / routes.
 // Files are versioned, so they never change once published; the service worker (public/sw.js) keeps them
 // for offline use. In memory, each file is fetched once per page load.
-import type { AreaFile, Manifest, RouteFile } from '../../shared/timetable';
+import type { AreaFile, LinesFile, Manifest, RouteFile } from '../../shared/timetable';
 
 export class DataVersionGoneError extends Error {
   constructor() {
@@ -53,6 +53,19 @@ export function loadRoute(m: Manifest, patternId: number): Promise<RouteFile> {
     p = getJson<RouteFile>(`/data/${m.version}/routes/${patternId}.json`);
     p.catch(() => routeCache.delete(k));
     routeCache.set(k, p);
+  }
+  return p;
+}
+
+const linesCache = new Map<string, Promise<LinesFile>>();
+
+/** Region-wide tram, metro, train and ferry line shapes (drawn at every radius). */
+export function loadLines(m: Manifest): Promise<LinesFile> {
+  let p = linesCache.get(m.version);
+  if (!p) {
+    p = getJson<LinesFile>(`/data/${m.version}/${m.lines.file}`);
+    p.catch(() => linesCache.delete(m.version));
+    linesCache.set(m.version, p);
   }
   return p;
 }

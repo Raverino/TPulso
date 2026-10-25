@@ -79,6 +79,17 @@ describe('expectedVehicles', () => {
     expect(vs).toHaveLength(1);
     expect(vs[0]!.serviceDate).toBe(TODAY);
   });
+  it('links a vehicle to its upcoming departure at a stop by the same trip key (used to filter on stop tap)', async () => {
+    const { areas, route3715 } = await setup();
+    const now = at(8, 50);
+    const v = expectedVehicles(manifest, areas, now).find(x => x.line === '3715')!;
+    const nextStop = route3715.stops[v.nextStopIndex]!;
+    const deps = departuresAtStop(manifest, areas, nextStop, now, now + 600_000);
+    expect(deps.map(d => d.tripKey)).toContain(v.key);
+    // A stop the bus has already passed does not list it.
+    const passed = route3715.stops[Math.max(0, v.nextStopIndex - 2)]!;
+    expect(departuresAtStop(manifest, areas, passed, now, now + 600_000).map(d => d.tripKey)).not.toContain(v.key);
+  });
   it('never returns the same trip twice (slices overlap between areas)', async () => {
     const { areas } = await setup();
     for (const h of [9, 12, 17, 20]) {
