@@ -1,0 +1,2 @@
+default_lang,feed_contact_email,feed_contact_url,feed_end_date,feed_lang,feed_publisher_name,feed_publisher_url,feed_start_date,feed_version
+pt,go@tmlmobilidade.pt,https://go.tmlmobilidade.pt,20270630,pt,TML - Transportes Metropolitanos de Lisboa,https://tmlmobilidade.pt,20261024,20261024-2112-02

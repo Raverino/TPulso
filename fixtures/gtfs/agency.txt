@@ -1,0 +1,5 @@
+agency_email,agency_fare_url,agency_id,agency_lang,agency_name,agency_phone,agency_timezone,agency_url,cemv_support,agency_code
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,A2L1N,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,44
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,BNA17,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,42
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,LA77N,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,41
+contacto@carrismetropolitana.pt,https://carrismetropolitana.pt/tarifarios,YA15B,pt,Carris Metropolitana,+351210410400,Europe/Lisbon,https://carrismetropolitana.pt,0,43

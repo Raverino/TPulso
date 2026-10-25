@@ -1,0 +1,2 @@
+agency_id,cemv_support,continuous_drop_off,continuous_pickup,route_color,route_desc,route_id,route_long_name,route_short_name,route_text_color,route_type,route_url
+YA15B,0,1,1,C61D23,,[YA15B]3715_0,Lisboa (M. Pombal) - Santa Marta do Pinhal (via Centro Sul),3715,FFFFFF,3,

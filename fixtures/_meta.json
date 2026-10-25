@@ -1,0 +1,82 @@
+{
+ "captured_at": "2026-10-25T13:41:38.821Z",
+ "source": "https://api.carrismetropolitana.pt/v2",
+ "files": {
+  "vehicles.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/vehicles",
+   "status": 200,
+   "cache_control": "public, max-age=5",
+   "items_in_response": 367,
+   "items_saved": 367
+  },
+  "vehicles.pb": {
+   "url": "https://api.carrismetropolitana.pt/v2/vehicles.pb",
+   "status": 200,
+   "cache_control": "public, max-age=5"
+  },
+  "stops.near-test-1500m.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/stops",
+   "status": 200,
+   "cache_control": "public, max-age=3600",
+   "items_in_response": 12752,
+   "items_saved": 11,
+   "note": "Subset of /v2/stops (full response ~6.8 MB): stops within 1500 m of the TEST location. Records are unmodified."
+  },
+  "arrivals.by_stop.060035.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/arrivals/by_stop/060035",
+   "status": 200,
+   "cache_control": "public, max-age=20",
+   "items_in_response": 205,
+   "items_saved": 205
+  },
+  "arrivals.by_stop.060033.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/arrivals/by_stop/060033",
+   "status": 200,
+   "cache_control": "public, max-age=20",
+   "items_in_response": 32,
+   "items_saved": 32,
+   "note": "Marquês de Pombal (Metro) P1 — nearest TML stop to the TEST location (~730 m)."
+  },
+  "pattern.3715_0_1.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/patterns/3715_0_1",
+   "status": 200,
+   "cache_control": "public, max-age=3600",
+   "items_in_response": 1,
+   "items_saved": 1,
+   "note": "Fetched with id \"3715_0_1\" derived from vehicle.pattern_id \"[PL3CL][YA15B]3715_0_1\" by removing the bracket prefixes — no exact-key endpoint exists."
+  },
+  "shape._2QDAD_3715_0_1.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/shapes/%5B2QDAD%5D3715_0_1",
+   "status": 200,
+   "cache_control": "public, max-age=3600"
+  },
+  "lines.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/lines",
+   "status": 200,
+   "cache_control": "public, max-age=3600",
+   "items_in_response": 717,
+   "items_saved": 717
+  },
+  "routes.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/routes",
+   "status": 200,
+   "cache_control": "public, max-age=3600",
+   "items_in_response": 956,
+   "items_saved": 956
+  },
+  "plans.json": {
+   "url": "https://api.carrismetropolitana.pt/v2/plans",
+   "status": 200,
+   "cache_control": "public, max-age=3600",
+   "items_in_response": 5,
+   "items_saved": 5
+  }
+ },
+ "chosen_vehicle": {
+  "id": "[YA15B]2436",
+  "trip_id": "[PL3CL][YA15B]3715_0_1_1330_1359_0_ESC_DOM",
+  "pattern_id": "[PL3CL][YA15B]3715_0_1",
+  "stop_id": "060035",
+  "line_id": "3715"
+ }
+}

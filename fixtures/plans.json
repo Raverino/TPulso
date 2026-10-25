@@ -1,0 +1,42 @@
+[
+ {
+  "agency_id": "44",
+  "id": "F1M13",
+  "valid_range": {
+   "end": "20260831",
+   "start": "20260801"
+  }
+ },
+ {
+  "agency_id": "41",
+  "id": "XS3H8",
+  "valid_range": {
+   "end": "20261231",
+   "start": "20260803"
+  }
+ },
+ {
+  "agency_id": "43",
+  "id": "2QDAD",
+  "valid_range": {
+   "end": "20270630",
+   "start": "20260803"
+  }
+ },
+ {
+  "agency_id": "42",
+  "id": "0277F",
+  "valid_range": {
+   "end": "20261231",
+   "start": "20260803"
+  }
+ },
+ {
+  "agency_id": "44",
+  "id": "G8DDS",
+  "valid_range": {
+   "end": "20270531",
+   "start": "20270101"
+  }
+ }
+]

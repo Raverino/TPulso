@@ -1,0 +1,2 @@
+bikes_allowed,block_id,cars_allowed,direction_id,pattern_id,route_id,service_id,shape_id,trip_headsign,trip_id,trip_short_name,wheelchair_accessible
+0,[YA15B]ED1018,0,0,[YA15B]3715_0_1,[YA15B]3715_0,[PL3CL][YA15B]ESC_DOM,[PL3CL][YA15B]3715_0_1,Santa Marta do Pinhal (via Centro Sul),[PL3CL][YA15B]3715_0_1_1330_1359_0_ESC_DOM,,0
