@@ -6,6 +6,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel } from "@/components/transit/ArrivalsDrawer";
+import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
+import { groupStations, stationSize } from "@/offline/stations";
 import {
   clockSec,
   distanceMeters,
@@ -120,7 +122,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hasCenter, center.lat, center.lng, allStops, radius, filter],
   );
-  const stops: Stop[] = nearStops;
 
   // TPulso: Expected vehicles — positions calculated from the timetable, recomputed every second.
   const expected = useMemo(
@@ -143,6 +144,8 @@ export default function App() {
       routeId: String(v.patternId),
       tripId: v.key,
       live: false,
+      color: v.color,
+      textColor: v.textColor,
     }),
     [opName],
   );
@@ -178,6 +181,26 @@ export default function App() {
     if (expired) return [];
     return nearStops.flatMap((s) => departuresAtStop(manifest, tt.areas, s.id, boardNow - 30_000, boardNow + WINDOW_MS + 15_000).map((d) => toLive(d, s)));
   }, [manifest, tt.loading, tt.areas, expired, nearStops, boardNow, toLive]);
+
+  // TPulso: one marker per physical station (same normalised name within 60 m), sized by its departures in
+  // the next 10 minutes and coloured by the modes serving it (already limited by the mode filter).
+  const stations = useMemo(() => groupStations(nearStops), [nearStops]);
+  const mapStations: MapStation[] = useMemo(() => {
+    const perStop = new Map<string, number>();
+    for (const d of board ?? []) {
+      if (d.expectedAt < boardNow || d.expectedAt > boardNow + WINDOW_MS) continue;
+      if (filter !== "all" && d.mode !== filter) continue;
+      perStop.set(d.stopArea, (perStop.get(d.stopArea) ?? 0) + 1);
+    }
+    return stations.map((st) => ({
+      id: st.id,
+      name: st.name,
+      lat: st.lat,
+      lng: st.lng,
+      modes: filter === "all" ? st.modes : st.modes.filter((m) => m === filter),
+      size: stationSize(st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0)),
+    }));
+  }, [stations, board, boardNow, filter]);
 
   const [pinned, setPinned] = useState<Pinned | null>(null);
   useEffect(() => {
@@ -272,13 +295,19 @@ export default function App() {
     setOpenId(null);
     setPanelView(view);
   }, []);
-  // TPulso: tapping a stop shows its departures in the next 10 minutes.
-  const tappedStop = selectedStopId ? nearStops.find((s) => s.id === selectedStopId) : undefined;
+  // A tapped station covers all of its stops (e.g. the six Marquês de Pombal platforms).
+  const tappedStation = selectedStopId ? stations.find((st) => st.id === selectedStopId) : undefined;
   const stopPanel: StopPanel | null = useMemo(() => {
-    if (!tappedStop || !manifest) return null;
-    const rows = expired ? [] : departuresAtStop(manifest, tt.areas, tappedStop.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, tappedStop));
-    return { id: tappedStop.id, name: tappedStop.name, distanceM: Math.round(tappedStop.distance), departures: rows, fetchedAt: now, error: null };
-  }, [tappedStop, manifest, expired, tt.areas, now, toLive]);
+    if (!tappedStation || !manifest) return null;
+    const members = nearStops.filter((s) => tappedStation.stopIds.includes(s.id));
+    const rows = expired
+      ? []
+      : members
+          .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
+          .sort((a, b) => a.expectedAt - b.expectedAt);
+    const distanceM = Math.round(Math.min(...members.map((m) => m.distance)));
+    return { id: tappedStation.id, name: tappedStation.name, distanceM, departures: rows, fetchedAt: now, error: null };
+  }, [tappedStation, nearStops, manifest, expired, tt.areas, now, toLive]);
   const selectStop = useCallback(
     (id: string) => {
       setSelectedId(null);
@@ -373,7 +402,7 @@ export default function App() {
     for (const id of shownPatterns) {
       const r = id === routeFile.route?.id ? routeFile.route : routeFiles.get(id);
       if (!r) continue;
-      m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id) });
+      m.set(`full|${r.id}`, { ...prepareRoute({ id: `full|${r.id}`, mode: r.mode, line: r.line, headsign: r.headsign, operator: opName.get(r.op) ?? r.op, path: routePath(r) }), group: String(r.id), color: r.color });
     }
     return m;
   }, [shownPatterns, routeFiles, routeFile.route, opName]);
@@ -416,6 +445,21 @@ export default function App() {
     return { upcoming: list.filter((u) => isInside(u, center, radius)), beyond: list.filter((u) => !isInside(u, center, radius)) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExp, routeFile.route, now, center.lat, center.lng, radius]);
+
+  // TPulso: all stops of the selected vehicle in its line colour — passed (dimmed), next (larger, ring) and
+  // upcoming, with the scheduled countdown for the upcoming stops inside the radar.
+  const routeStops: RouteStopMarker[] = useMemo(() => {
+    const r = routeFile.route;
+    if (!selectedExp || !r || r.id !== selectedExp.patternId) return [];
+    const labels = new Map(upcoming.map((u) => [u.key, countdownLabel(nowSec + u.etaS, nowSec, "scheduled")]));
+    const color = selectedExp.color || "";
+    const textColor = selectedExp.textColor || "";
+    return r.stopInfo.map(([, name, lat, lng], i) => {
+      const state = i < selectedExp.nextStopIndex ? "passed" : i === selectedExp.nextStopIndex ? "next" : "upcoming";
+      const label = labels.get(`${r.id}-${i}`);
+      return { key: `${r.id}-${i}`, name, lat, lng, state, ...(label ? { label } : {}), color, textColor };
+    });
+  }, [selectedExp, routeFile.route, upcoming, nowSec]);
 
 
 
@@ -557,15 +601,14 @@ export default function App() {
                 filter={filter}
                 vehicles={visibleVehicles}
                 routes={routes}
-                stops={stops}
+                stations={mapStations}
                 selectedId={selectedId}
                 focusStop={focusStop}
-                upcoming={upcoming}
+                routeStops={routeStops}
                 onSelectStop={selectStop}
                 selectedStopId={panelView === "stop" ? selectedStopId : null}
                 recenterRequest={recenterRequest}
                 baseLines={baseLines}
-                now={now}
                 onSelect={(id) => {
                   // Empty-radar tap or re-tapping the selected vehicle: reset everything.
                   if (panelView !== "results" || id === null || id === selectedId) {

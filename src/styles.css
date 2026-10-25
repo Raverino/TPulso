@@ -498,3 +498,77 @@
   outline: 2px dashed oklch(0.97 0.008 250 / 0.9);
   outline-offset: 2px;
 }
+
+/* --- TPulso: station markers (one per physical station) ---------------------------------------
+ * A ring split into one coloured segment per mode (--ring is a conic-gradient), sized by departures
+ * in the next 10 minutes (--size). The icon box is at least 28 px so it stays tappable on a phone. */
+.station {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+.station-ring {
+  width: var(--size);
+  height: var(--size);
+  border-radius: 9999px;
+  background: var(--ring);
+  /* cut the middle out: a ring, not a disc */
+  -webkit-mask: radial-gradient(circle, transparent 0 calc(50% - 3.5px), #000 calc(50% - 3px));
+  mask: radial-gradient(circle, transparent 0 calc(50% - 3.5px), #000 calc(50% - 3px));
+  box-shadow: 0 0 0 1px oklch(0.15 0.015 258 / 0.6);
+}
+.station-core {
+  position: absolute;
+  width: calc(var(--size) - 7px);
+  height: calc(var(--size) - 7px);
+  border-radius: 9999px;
+  background: oklch(0.16 0.025 258 / 0.85);
+}
+.station.is-selected .station-ring {
+  background: var(--primary);
+}
+.station.is-selected .station-core {
+  background: var(--primary);
+  opacity: 0.35;
+}
+.station-label {
+  position: absolute;
+  bottom: calc(50% + var(--size) / 2 + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background: oklch(0.21 0.028 258 / 0.92);
+  color: var(--foreground);
+  font: 600 10px/1.4 "DM Sans", sans-serif;
+  pointer-events: none;
+}
+.station.is-selected .station-label {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 700;
+}
+
+/* --- TPulso: stops of the selected vehicle, in its line colour (--line) ------------------------ */
+.route-stop {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: var(--line);
+  border: 2px solid var(--background);
+}
+.route-stop.is-passed {
+  opacity: 0.3;
+}
+.route-stop.is-next {
+  width: 16px;
+  height: 16px;
+  box-shadow: 0 0 0 3px var(--background), 0 0 0 5px var(--line);
+}
+.route-stop .upcoming-eta {
+  background: var(--line);
+  color: var(--line-text);
+}

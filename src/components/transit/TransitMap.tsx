@@ -1,7 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
-import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
@@ -10,12 +10,11 @@ import {
   type TransitRoute,
   type FilterMode,
   type LatLng,
-  type Stop,
-  type UpcomingStop,
+  type TransportMode,
   type Vehicle,
 } from "@/lib/transit";
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
-import { countdownLabel, SOURCE_TEXT, type SourceState } from "@/lib/sourceStatus";
+import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES } from "@/config";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
@@ -26,12 +25,81 @@ const MODE_GLYPH: Record<Vehicle["mode"], string> = {
 };
 
 const esc = (s: string) => s.replace(/[<>&"']/g, "");
+const HEX = /^#[0-9a-f]{6}$/i;
+const MODE_VAR: Record<TransportMode, string> = { bus: "var(--bus)", tram: "var(--tram)", train: "var(--train)", ferry: "var(--ferry)" };
+
+/** TPulso: a station on the map (one per physical station; see src/offline/stations.ts). */
+export interface MapStation {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  /** Modes shown in the ring (already filtered by the mode filter). */
+  modes: TransportMode[];
+  /** Ring size in px (scaled by departures in the next 10 minutes). */
+  size: number;
+}
+
+/** TPulso: a stop of the selected vehicle, in its line colour. */
+export interface RouteStopMarker {
+  key: string;
+  name: string;
+  lat: number;
+  lng: number;
+  state: "passed" | "next" | "upcoming";
+  /** Scheduled countdown ("~3 min") for upcoming stops inside the radar. */
+  label?: string;
+  color: string;
+  textColor: string;
+}
+
+const stationIconCache = new Map<string, L.DivIcon>();
+/** Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. */
+function stationIcon(s: MapStation, selected: boolean, showLabel: boolean) {
+  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${showLabel ? s.name : ""}`;
+  const hit = stationIconCache.get(key);
+  if (hit) return hit;
+  const n = Math.max(1, s.modes.length);
+  const ring = s.modes.length > 1
+    ? `conic-gradient(${s.modes.map((m, i) => `${MODE_VAR[m]} ${(i * 100) / n}% ${((i + 1) * 100) / n}%`).join(", ")})`
+    : MODE_VAR[s.modes[0] ?? "bus"];
+  const box = Math.max(28, s.size + 4);
+  const icon = L.divIcon({
+    className: "",
+    iconSize: [box, box],
+    iconAnchor: [box / 2, box / 2],
+    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${showLabel ? `<span class="station-label">${esc(s.name)}</span>` : ""}</div>`,
+  });
+  stationIconCache.set(key, icon);
+  return icon;
+}
+
+function routeStopIcon(r: RouteStopMarker) {
+  const color = HEX.test(r.color) ? r.color : "var(--primary)";
+  const text = HEX.test(r.textColor) ? r.textColor : "var(--primary-foreground)";
+  return L.divIcon({
+    className: "",
+    iconSize: r.state === "next" ? [16, 16] : [10, 10],
+    iconAnchor: r.state === "next" ? [8, 8] : [5, 5],
+    html: `<div class="route-stop is-${r.state}" style="--line:${color};--line-text:${text}" title="${esc(r.name)}">${r.label ? `<span class="upcoming-eta lift">${esc(r.label)}</span>` : ""}</div>`,
+  });
+}
+
+/** Names of stations show from this zoom on (and always for the tapped one). */
+const LABEL_ZOOM = 17.5;
+function ZoomWatch({ onZoom }: { onZoom: (z: number) => void }) {
+  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
+  useEffect(() => onZoom(map.getZoom()), [map, onZoom]);
+  return null;
+}
 
 const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
 function vehicleIcon(v: Vehicle) {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}`;
+  const bg = v.color && HEX.test(v.color) ? v.color : "";
+  const fg = v.textColor && HEX.test(v.textColor) ? v.textColor : "";
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${bg}|${fg}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   const icon = L.divIcon({
@@ -39,7 +107,8 @@ function vehicleIcon(v: Vehicle) {
     iconSize: [34, 34],
     iconAnchor: [17, 17],
     // TPulso offline: every vehicle is an Expected position from the timetable (dashed outline + badge).
-    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
+    // TPulso: pin in the official line colour (same as its route line and stops), else the mode colour.
+    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}"${bg ? ` style="background:${bg};${fg ? `color:${fg};` : ""}"` : ""}>
         <span class="src-dot src-expected pin-src"></span>
         <span style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
         <span>${esc(v.line)}</span>
@@ -73,13 +142,6 @@ function GlideGuard() {
   }, [map]);
   return null;
 }
-
-const stopIcon = L.divIcon({
-  className: "",
-  iconSize: [10, 10],
-  iconAnchor: [5, 5],
-  html: `<div class="stop-pin"></div>`,
-});
 
 // TPulso: the ETA badge carries the stop time's source dot (Live / Scheduled / Estimated).
 function upcomingIcon(etaLabelText: string, name: string, state?: SourceState) {
@@ -178,23 +240,24 @@ interface Props {
   filter: FilterMode;
   vehicles: Vehicle[];
   routes: Map<string, TransitRoute>;
-  stops: Stop[];
+  /** TPulso: one marker per physical station inside the radar. */
+  stations: MapStation[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   focusStop?: { lat: number; lng: number; name: string; label: string; vehicleId: string | null } | null;
   /** Live feed refresh in progress: show a charging sweep on the radar. */
   loading?: boolean;
   // TPulso additions
-  /** Upcoming stops of the selected vehicle with their expected times (Live / Scheduled / Estimated). */
-  upcoming: UpcomingStop[];
-  /** Tapping a stop opens its departures. */
+  /** Stops of the selected vehicle (passed / next / upcoming), in its line colour. */
+  routeStops: RouteStopMarker[];
+  /** Tapping a station opens its departures. */
   onSelectStop: (id: string) => void;
+  /** The tapped station (yellow), if any. */
   selectedStopId: string | null;
   /** Incremented by the top bar's recentre button. */
   recenterRequest: number;
   /** TPulso: tram, metro, train and ferry lines of the region, drawn at every radius. */
   baseLines: TransitRoute[];
-  now: number;
 }
 
 function ClearOnMapClick({ onClear }: { onClear: () => void }) {
@@ -241,16 +304,15 @@ export default function TransitMap({
   filter,
   vehicles,
   routes,
-  stops,
+  stations,
   selectedId,
   onSelect,
   focusStop,
-  upcoming,
+  routeStops,
   onSelectStop,
   selectedStopId,
   recenterRequest,
   baseLines,
-  now,
 }: Props) {
   const [geo, setGeo] = useState({ x: 0, y: 0, r: 0 });
   const [away, setAway] = useState(false);
@@ -259,7 +321,7 @@ export default function TransitMap({
     if (recenterRequest > 0) setRecenterSignal((n) => n + 1);
   }, [recenterRequest]);
   const selected = selectedId ? vehicles.find((v) => v.id === selectedId) : undefined;
-  const nowSec = Math.floor(now / 1000);
+  const [zoom, setZoom] = useState(16);
 
   const visibleVehicles = useMemo(() => {
     if (focusStop) return vehicles.filter((v) => v.id === focusStop.vehicleId);
@@ -271,12 +333,9 @@ export default function TransitMap({
     // TPulso: a route can come as several slices (one per map area); `group` is the route they belong to.
     return [...routes.values()].filter((r): r is TransitRoute => ids.has(r.group ?? r.id));
   }, [visibleVehicles, routes]);
-  const visibleStops = useMemo(() => {
-    // TPulso: stops are shown (the original hid them); with a vehicle selected, its own stops are drawn
-    // as upcoming-stop markers instead.
-    if (selected || focusStop) return [];
-    return filter === "all" ? stops : stops.filter((s) => s.mode === filter);
-  }, [stops, filter, selected, focusStop]);
+  // TPulso focus mode: with a vehicle selected only its own stops are drawn (routeStops); stations are
+  // hidden. The mode filter is already applied to `stations` (ring segments and which stations show).
+  const visibleStations = selected || focusStop ? [] : stations;
   // Keep the station marker on the radar: clamp to the rim when it lies outside.
   const focusPos = useMemo((): [number, number] | null => {
     if (!focusStop) return null;
@@ -289,7 +348,7 @@ export default function TransitMap({
     const f = max / d;
     return [center.lat + (dy * f) / 111_320, center.lng + (dx * f) / (111_320 * k)];
   }, [focusStop, center, radius]);
-  const upcomingStops = focusStop || !selected ? [] : upcoming;
+  const selectedStops = focusStop || !selected ? [] : routeStops;
   const clear = useCallback(() => onSelect(null), [onSelect]);
 
   return (
@@ -315,6 +374,7 @@ export default function TransitMap({
       <Recenter center={center} radius={radius} recenterSignal={recenterSignal} onAwayChange={setAway} />
       <GlideGuard />
       <ClearOnMapClick onClear={clear} />
+      <ZoomWatch onZoom={setZoom} />
 
 
       <Circle
@@ -339,18 +399,12 @@ export default function TransitMap({
         </Popup>
       </Marker>
 
-      {upcomingStops.map((u) => (
-        <Marker
-          key={u.key}
-          position={[u.lat, u.lng]}
-          icon={upcomingIcon(countdownLabel(nowSec + u.etaS, nowSec, u.state), u.name, u.state)}
-          zIndexOffset={500}
-        >
+      {/* TPulso: the selected vehicle's stops in its line colour — passed dimmed, next larger with a ring. */}
+      {selectedStops.map((u) => (
+        <Marker key={u.key} position={[u.lat, u.lng]} icon={routeStopIcon(u)} zIndexOffset={u.state === "next" ? 600 : u.state === "upcoming" ? 500 : 400}>
           <Popup>
             <strong className="font-display">{u.name}</strong>
-            <div className="text-muted-foreground">
-              {u.aheadM} m ahead · {SOURCE_TEXT[u.state]} {countdownLabel(nowSec + u.etaS, nowSec, u.state)}
-            </div>
+            <div className="text-muted-foreground">{u.state === "passed" ? "Already passed" : u.label ? `Scheduled ${u.label}` : u.state === "next" ? "Next stop" : "Further along the line"}</div>
           </Popup>
         </Marker>
       ))}
@@ -364,11 +418,12 @@ export default function TransitMap({
         />
       )}
 
-      {visibleStops.map((s) => (
+      {/* TPulso: one ring per physical station; name only when tapped or zoomed in. */}
+      {visibleStations.map((s) => (
         <Marker
           key={s.id}
           position={[s.lat, s.lng]}
-          icon={s.id === selectedStopId ? upcomingIcon(s.name, s.name) : stopIcon}
+          icon={stationIcon(s, s.id === selectedStopId, s.id === selectedStopId || zoom >= LABEL_ZOOM)}
           title={s.name}
           zIndexOffset={s.id === selectedStopId ? 800 : 0}
           eventHandlers={{ click: () => onSelectStop(s.id) }}
@@ -376,7 +431,7 @@ export default function TransitMap({
       ))}
 
       {/* TPulso: whole lines (first stop to terminus), never clipped to the radar or to map areas. */}
-      {baseLines.map((r) => (
+      {!selected && baseLines.map((r) => (
         <Polyline
           key={`base-${r.id}`}
           positions={r.path}
@@ -390,8 +445,8 @@ export default function TransitMap({
         <Polyline
           key={`route-${r.id}`}
           positions={r.path}
-          className={`route-line route-${r.mode}`}
-          pathOptions={{ weight: 3, opacity: 0.75, color: "currentColor", lineCap: "round", lineJoin: "round" }}
+          className={r.color && HEX.test(r.color) ? "route-line" : `route-line route-${r.mode}`}
+          pathOptions={{ weight: selected ? 4 : 3, opacity: selected ? 0.9 : 0.75, color: r.color && HEX.test(r.color) ? r.color : "currentColor", lineCap: "round", lineJoin: "round" }}
           smoothFactor={0}
           interactive={false}
         />
