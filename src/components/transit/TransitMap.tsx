@@ -77,6 +77,29 @@ function stationIcon(s: MapStation, selected: boolean, showLabel: boolean) {
   return icon;
 }
 
+/**
+ * TPulso: a station of a spread area point. It flies out from the area point's centre (dx, dy = its offset)
+ * over 0.5 s, and back in when the area point collapses (closing).
+ */
+function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean) {
+  const base = stationIcon(s, false, true);
+  const o = base.options;
+  return L.divIcon({
+    ...o,
+    html: `<div class="spread-anim${closing ? " is-closing" : ""}" style="--fx:${-dx}px;--fy:${-dy}px">${o.html as string}</div>`,
+  });
+}
+
+/** TPulso: the translucent, blurred disc under a spread area point (never catches taps). */
+function spreadDiscIcon(radiusPx: number, closing: boolean) {
+  const d = Math.round(radiusPx * 2);
+  return L.divIcon({ className: "spread-disc-marker", iconSize: [d, d], iconAnchor: [d / 2, d / 2], html: `<div class="spread-disc${closing ? " is-closing" : ""}"></div>` });
+}
+
+/** Spread and collapse take this long (CSS uses the same 500 ms). */
+const SPREAD_MS = 500;
+const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 function routeStopIcon(r: RouteStopMarker) {
   const color = HEX.test(r.color) ? r.color : "var(--primary)";
   const text = HEX.test(r.textColor) ? r.textColor : "var(--primary-foreground)";
@@ -176,13 +199,34 @@ const StationLayer = memo(function StationLayer({
 }) {
   const map = useMap();
   const [zoom, setZoom] = useState(() => map.getZoom());
-  const [expanded, setExpanded] = useState<string | null>(null);
+  /** The spread area point; `closing` while it animates back in (then it is removed). */
+  const [spread, setSpread] = useState<{ key: string; closing: boolean } | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const collapse = useCallback((animate: boolean) => {
+    clearTimeout(closeTimer.current);
+    if (!animate || reducedMotion()) return setSpread(null);
+    setSpread((cur) => (cur && !cur.closing ? { ...cur, closing: true } : cur));
+    closeTimer.current = setTimeout(() => setSpread(null), SPREAD_MS);
+  }, []);
+  const expand = useCallback((key: string) => {
+    clearTimeout(closeTimer.current);
+    setSpread({ key, closing: false });
+  }, []);
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   useMapEvents({
-    zoomstart: () => setExpanded(null),
+    zoomstart: () => collapse(false), // a zoom moves everything: no animation
     zoomend: () => setZoom(map.getZoom()),
-    click: () => setExpanded(null),
+    click: () => collapse(true), // background tap: animate back in
   });
-  useEffect(() => setExpanded(null), [collapseKey]);
+  useEffect(() => collapse(false), [collapseKey, collapse]);
+  // While spread: vehicles and route lines fade to 25 % (CSS on the map container, transition 0.5 s).
+  const spreadOpen = !!spread && !spread.closing && !selectedStopId;
+  useEffect(() => {
+    const el = map.getContainer();
+    el.classList.toggle("map-spread", spreadOpen);
+    return () => el.classList.remove("map-spread");
+  }, [map, spreadOpen]);
+  const expanded = spread?.key ?? null;
 
   const byId = useMemo(() => new Map(stations.map((s) => [s.id, s])), [stations]);
   const clusters = useMemo(() => {
@@ -222,21 +266,43 @@ const StationLayer = memo(function StationLayer({
               icon={areaIcon(modes, members.length)}
               title={`${members.length} stations`}
               zIndexOffset={100}
-              eventHandlers={{ click: () => setExpanded(key) }}
+              eventHandlers={{ click: () => expand(key) }}
             />
           );
         }
-        // Spread: each station on a small circle around the area point, with a thin line to its real place.
+        // Spread: each station on a small circle around the area point, with a thin line to its real place,
+        // over a blurred disc. Stations fly out (and back in when closing); see .spread-anim in styles.css.
+        const closing = spread!.closing;
         const offsets = spreadOffsets(members.length);
-        return members.map((s, i) => {
-          const pos = map.unproject([c.x + offsets[i]!.dx, c.y + offsets[i]!.dy], zoom);
-          return (
-            <Fragment key={`spread-${s.id}`}>
-              <Polyline positions={[[s.lat, s.lng], pos]} pathOptions={{ color: "var(--radar)", weight: 1, opacity: 0.5 }} interactive={false} />
-              <Marker position={pos} icon={stationIcon(s, false, true)} title={s.name} zIndexOffset={700} eventHandlers={{ click: () => onSelectStop(s.id) }} />
-            </Fragment>
-          );
-        });
+        const ringR = Math.max(...offsets.map((o) => Math.hypot(o.dx, o.dy)));
+        return (
+          <Fragment key={`spread-${key}`}>
+            <Marker position={centre} icon={spreadDiscIcon(ringR + 30, closing)} interactive={false} keyboard={false} zIndexOffset={2000} />
+            {members.map((s, i) => {
+              const { dx, dy } = offsets[i]!;
+              const pos = map.unproject([c.x + dx, c.y + dy], zoom);
+              return (
+                <Fragment key={`spread-${s.id}`}>
+                  {/* keyed by phase: the line is re-created to play its fade-out */}
+                  <Polyline
+                    key={closing ? "out" : "in"}
+                    positions={[[s.lat, s.lng], pos]}
+                    className={`spread-link${closing ? " is-closing" : ""}`}
+                    pathOptions={{ color: "var(--radar)", weight: 1, opacity: 0.5 }}
+                    interactive={false}
+                  />
+                  <Marker
+                    position={pos}
+                    icon={spreadStationIcon(s, dx, dy, closing)}
+                    title={s.name}
+                    zIndexOffset={3000}
+                    eventHandlers={{ click: () => onSelectStop(s.id) }}
+                  />
+                </Fragment>
+              );
+            })}
+          </Fragment>
+        );
       })}
     </>
   );
