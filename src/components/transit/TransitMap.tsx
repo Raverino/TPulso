@@ -18,7 +18,7 @@ import {
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES, MODE_COLORS } from "@/config";
-import { clusterScreen, spreadOffsets } from "@/offline/stations";
+import { clusterScreen, layoutSpreadLabels, spreadOffsets, type SpreadLabel } from "@/offline/stations";
 import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
@@ -40,7 +40,7 @@ export interface MapStation {
   /** Normalised name: an area point counts its stations by name, not its platforms. */
   nameKey: string;
   kind: "platform" | "station";
-  /** Platforms: direction of travel (degrees clockwise from north), shown as a small arrow. */
+  /** Platforms: direction of travel (degrees clockwise from north), shown only on the selected marker. */
   heading: number | null;
   lat: number;
   lng: number;
@@ -67,12 +67,12 @@ export interface RouteStopMarker {
 
 const stationIconCache = new Map<string, L.DivIcon>();
 /**
- * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. A platform has a
- * small arrow for its direction of travel (it turns with the map: --bearing). The name is in the icon but only
- * shown for the tapped station and on hover (desktop); see .station-label in styles.css.
+ * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. Only the selected
+ * platform shows its direction: a small chip with an arrow (it turns with the map: --bearing). The name is in
+ * the icon but only shown for the tapped station and on hover (desktop); see .station-label in styles.css.
  */
 function stationIcon(s: MapStation, selected: boolean) {
-  const heading = s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
+  const heading = selected && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
   const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
@@ -85,7 +85,7 @@ function stationIcon(s: MapStation, selected: boolean) {
     className: "",
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
-    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${heading !== null ? `<span class="station-arrow" style="--heading:${heading}deg"></span>` : ""}<span class="station-label">${esc(s.name)}</span></div>`,
+    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${heading !== null ? `<span class="station-dir" style="--heading:${heading}deg" aria-hidden="true"><svg viewBox="0 0 10 10" width="10" height="10"><path d="M5 1 L8.5 8.5 L5 6.6 L1.5 8.5 Z" fill="currentColor"/></svg></span>` : ""}<span class="station-label">${esc(s.name)}</span></div>`,
   });
   stationIconCache.set(key, icon);
   return icon;
@@ -108,6 +108,42 @@ function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boole
 function spreadDiscIcon(radiusPx: number, closing: boolean) {
   const d = Math.round(radiusPx * 2);
   return L.divIcon({ className: "spread-disc-marker", iconSize: [d, d], iconAnchor: [d / 2, d / 2], html: `<div class="spread-disc${closing ? " is-closing" : ""}"></div>` });
+}
+
+/** Names of a spread area point (radial layout from layoutSpreadLabels), with leader lines where needed. */
+function spreadLabelsIcon(
+  labels: readonly SpreadLabel[],
+  items: readonly { dx: number; dy: number; half: number; name: string }[],
+  closing: boolean,
+) {
+  let lines = "";
+  let spans = "";
+  labels.forEach((l, i) => {
+    const it = items[i]!;
+    if (!l.width) return;
+    const ay = l.y + 8;
+    if (l.leader) {
+      const mx = it.dx + (l.side === "right" ? it.half : -it.half);
+      const lx = l.side === "right" ? l.x : l.x + l.width;
+      lines += `<line x1="${mx}" y1="${it.dy}" x2="${lx}" y2="${ay}"/>`;
+    }
+    spans += `<span class="spread-label" style="left:${Math.round(l.x)}px;top:${Math.round(l.y)}px;width:${Math.round(l.width)}px">${esc(it.name)}</span>`;
+  });
+  return L.divIcon({
+    className: "spread-labels-marker",
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+    html: `<div class="spread-labels${closing ? " is-closing" : ""}"><svg class="spread-leaders" width="1" height="1">${lines}</svg>${spans}</div>`,
+  });
+}
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+/** Width a name needs in the label style (600 10px DM Sans, 6 px padding each side). */
+function labelWidth(name: string): number {
+  measureCtx ??= document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return name.length * 6 + 12;
+  measureCtx.font = '600 10px "DM Sans", sans-serif';
+  return Math.ceil(measureCtx.measureText(name).width) + 13;
 }
 
 /** Spread and collapse take this long (CSS uses the same 500 ms). */
@@ -230,6 +266,17 @@ const StationLayer = memo(function StationLayer({
     click: () => collapse(true), // background tap: animate back in
   });
   useEffect(() => collapse(false), [collapseKey, collapse]);
+  const [layoutTick, setLayoutTick] = useState(0);
+  useEffect(() => {
+    const rotate = () => collapse(false);
+    const moved = () => setLayoutTick((n) => n + 1);
+    map.on("rotate", rotate);
+    map.on("moveend", moved);
+    return () => {
+      map.off("rotate", rotate);
+      map.off("moveend", moved);
+    };
+  }, [map, collapse]);
   // While spread: vehicles and route lines fade to 25 % (CSS on the map container, transition 0.5 s).
   const spreadOpen = !!spread && !spread.closing && !selectedStopId;
   useEffect(() => {
@@ -324,7 +371,7 @@ const StationLayer = memo(function StationLayer({
         if (expanded !== key) {
           const modes = MODE_ORDER.filter((m) => members.some((s) => s.modes.includes(m)));
           // Counted by name: the two sides of a street (two platforms) are one station.
-          const named = new Set(members.map((s) => s.nameKey)).size;
+          const named = new Set(members.map((s) => s.name)).size; // by the place name shown (platforms share it)
           return (
             <Marker
               key={`area-${key}`}
@@ -336,17 +383,30 @@ const StationLayer = memo(function StationLayer({
             />
           );
         }
-        // Spread: each station on a small circle around the area point, with a thin line to its real place,
-        // over a blurred disc. Stations fly out (and back in when closing); see .spread-anim in styles.css.
+        // Spread: each station on a small upright circle around the area point (screen pixels, so it stays
+        // upright on a turned map), with a thin line to its real place, over a blurred disc, and its name
+        // outside the circle (radial layout, never overlapping or cut off). Stations fly out (and back in).
         const closing = spread!.closing;
+        void layoutTick; // re-laid out after a pan (the radar circle stays, the map moves)
         const offsets = spreadOffsets(members.length);
         const ringR = Math.max(...offsets.map((o) => Math.hypot(o.dx, o.dy)));
+        const cp = map.latLngToContainerPoint(centre);
+        const root = map.getContainer().parentElement;
+        const rs = root ? getComputedStyle(root) : null;
+        const circle = {
+          cx: (rs ? parseFloat(rs.getPropertyValue("--x")) : cp.x) - cp.x,
+          cy: (rs ? parseFloat(rs.getPropertyValue("--y")) : cp.y) - cp.y,
+          r: rs ? parseFloat(rs.getPropertyValue("--r")) || 200 : 200,
+        };
+        const items = members.map((s, i) => ({ ...offsets[i]!, half: Math.max(28, s.size + 4) / 2, width: labelWidth(s.name), name: s.name }));
+        const labels = layoutSpreadLabels(items, circle);
         return (
           <Fragment key={`spread-${key}`}>
             <Marker position={centre} icon={spreadDiscIcon(ringR + 30, closing)} interactive={false} keyboard={false} zIndexOffset={2000} />
+            <Marker position={centre} icon={spreadLabelsIcon(labels, items, closing)} interactive={false} keyboard={false} zIndexOffset={2500} />
             {members.map((s, i) => {
               const { dx, dy } = offsets[i]!;
-              const pos = map.unproject([c.x + dx, c.y + dy], zoom);
+              const pos = map.containerPointToLatLng([cp.x + dx, cp.y + dy]);
               return (
                 <Fragment key={`spread-${s.id}`}>
                   {/* keyed by phase: the line is re-created to play its fade-out */}

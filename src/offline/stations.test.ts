@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TransportMode } from '../../shared/types';
 import nearStops from '../../fixtures/stops.near-test-1500m.json';
 import { encodePolyline, type AreaFile, type PatternData } from '../../shared/timetable';
-import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, type StationStop, type StopDirection, type StopKind } from './stations';
+import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, layoutSpreadLabels, type SpreadLabel, type StationStop, type StopDirection, type StopKind } from './stations';
 
 // Real stops around Marquês de Pombal (fixture from the TML API).
 const bus = new Set<TransportMode>(['bus']);
@@ -30,62 +30,59 @@ const at = (id: string, name: string, lat: number, lng: number, d?: StopDirectio
 const east = (m: number) => m / 86_860;
 
 describe('groupStations', () => {
-  it('never merges real stops more than 15 m apart (no directions known: distance only)', () => {
+  it('makes one place of the real Marquês de Pombal stops of one mode within 40 m, with one name', () => {
     const stations = groupStations(stops);
-    for (const st of stations) expect(st.kind).toBe('platform');
-    // The six "Marquês de Pombal (Metro)" bus stops stand around the roundabout: not one marker any more.
     const mp = stations.find(s => s.stopIds.includes('060033'))!;
-    expect(mp.stopIds.length).toBeLessThan(6);
+    for (const id of ['060123', '060143', '060149', '060405', '060462']) expect(mp.stopIds).toContain(id);
+    expect(mp.kind).toBe('station'); // no directions known: never split
+    expect(mp.towards).toBeNull();
+    // The name is one of the real stop names (never an id, never invented), without platform codes.
+    expect(stops.some(s => s.name.startsWith(mp.name))).toBe(true);
+    expect(mp.name).not.toMatch(/ P\d$/);
   });
 
-  it('keeps the two sides of a street apart and links them as each other\'s "other side"', () => {
-    const [a, b] = [
+  it('names a place after its most common stop name; a tie goes to the shortest', () => {
+    const [p] = groupStations([
+      at('a', 'Marquês Pombal', 38.72, -9.145),
+      at('b', 'Mq. Pombal - Av. Fontes P. Melo', 38.72, -9.145 + east(20)),
+      at('c', 'Marquês Pombal', 38.72, -9.145 + east(35)),
+    ]);
+    expect(p!.name).toBe('Marquês Pombal');
+    const [q] = groupStations([at('a', 'Rato (Largo)', 38.72, -9.15), at('b', 'Rato', 38.72, -9.15 + east(10))]);
+    expect(q!.name).toBe('Rato');
+  });
+
+  it('splits a place with opposite directions into two platforms with the same name, each other\'s other side', () => {
+    const st = groupStations([
       at('a', 'Av. da Liberdade', 38.72, -9.145, dir('bus', 0, { 'Cais do Sodré': 9, Rossio: 2 })),
       at('b', 'Av. Liberdade', 38.72, -9.145 + east(25), dir('bus', 180, { Odivelas: 7 })),
-    ];
-    const st = groupStations([a, b]);
+      at('c', 'Av. da Liberdade', 38.72, -9.145 + east(5), dir('bus', 10, { Rossio: 1 })),
+    ]);
     expect(st).toHaveLength(2);
-    const sa = st.find(s => s.id === 'a')!, sb = st.find(s => s.id === 'b')!;
-    expect(sa.towards).toBe('Cais do Sodré');
-    expect(sa.heading).toBeCloseTo(0, 0);
+    expect(new Set(st.map(s => s.name))).toEqual(new Set(['Av. da Liberdade']));
+    const sa = st.find(s => s.stopIds.includes('a'))!, sb = st.find(s => s.stopIds.includes('b'))!;
+    expect(sa.stopIds).toEqual(['a', 'c']);
+    expect(sa).toMatchObject({ kind: 'platform', towards: 'Cais do Sodré' });
     expect(sa.otherSide).toEqual({ id: 'b', towards: 'Odivelas' });
     expect(sb.otherSide).toEqual({ id: 'a', towards: 'Cais do Sodré' });
   });
 
-  it('pairs "other sides" both ways, best pair first; a third platform links one way', () => {
+  it('keeps a place with one direction as one marker without a direction', () => {
     const st = groupStations([
-      at('a', 'Saldanha', 38.72, -9.145, dir('bus', 0, { Norte: 1 })),
-      at('b', 'Saldanha', 38.72, -9.145 + east(25), dir('bus', 180, { Sul: 1 })),
-      at('c', 'Av. República', 38.72, -9.145 - east(30), dir('bus', 185, { Sul: 1 })),
-    ]);
-    const by = (id: string) => st.find(s => s.id === id)!;
-    expect(by('a').otherSide?.id).toBe('b');
-    expect(by('b').otherSide?.id).toBe('a');
-    expect(by('c').otherSide?.id).toBe('a');
-  });
-
-  it('merges stops on the same side (within 15 m, same direction) into one platform, not opposite ones', () => {
-    const same = groupStations([
       at('a', 'Rato', 38.72, -9.15, dir('bus', 90, { Belém: 3 })),
-      at('b', 'Rato', 38.72, -9.15 + east(10), dir('bus', 100, { Belém: 1, Algés: 4 })),
-    ]);
-    expect(same).toHaveLength(1);
-    expect(same[0]!.stopIds).toEqual(['a', 'b']);
-    expect(same[0]!.towards).toBe('Algés');
-    const opposite = groupStations([
-      at('a', 'Rato', 38.72, -9.15, dir('bus', 90)),
-      at('b', 'Rato', 38.72, -9.15 + east(10), dir('bus', 270)),
-    ]);
-    expect(opposite).toHaveLength(2);
-  });
-
-  it('merges metro, train and ferry stops of the same mode within 40 m into one station, whatever their names', () => {
-    const st = groupStations([
-      at('m1', 'Marquês de Pombal (Metro) P1', 38.7259, -9.1503, dir('metro', 10), ['tram']),
-      at('m2', 'Marquês Pombal - Linha Azul', 38.7259, -9.1503 + east(30), dir('metro', 190), ['tram']),
+      at('b', 'Rato', 38.72, -9.15 + east(30), dir('bus', 100, { Algés: 4 })),
     ]);
     expect(st).toHaveLength(1);
-    expect(st[0]).toMatchObject({ kind: 'station', heading: null, towards: null, otherSide: null, stopIds: ['m1', 'm2'] });
+    expect(st[0]).toMatchObject({ kind: 'station', heading: null, towards: null, otherSide: null, stopIds: ['a', 'b'] });
+  });
+
+  it('merges metro, train and ferry stops of one mode within 40 m into one station, never split', () => {
+    const st = groupStations([
+      at('m1', 'Marquês de Pombal (Metro) P1', 38.7259, -9.1503, dir('metro', 10), ['tram']),
+      at('m2', 'Marquês de Pombal', 38.7259, -9.1503 + east(30), dir('metro', 190), ['tram']),
+    ]);
+    expect(st).toHaveLength(1);
+    expect(st[0]).toMatchObject({ kind: 'station', heading: null, stopIds: ['m1', 'm2'] });
   });
 
   it('never merges across modes, even with the same name and 10 m apart', () => {
@@ -94,7 +91,45 @@ describe('groupStations', () => {
       at('m', 'Marquês de Pombal (Metro)', 38.7259, -9.1503 + east(10), dir('metro', null), ['tram']),
     ]);
     expect(st).toHaveLength(2);
-    expect(st.map(s => s.kind).sort()).toEqual(['platform', 'station']);
+  });
+});
+
+describe('layoutSpreadLabels', () => {
+  const circle = { cx: 0, cy: 0, r: 200 };
+  const overlap = (a: SpreadLabel, b: SpreadLabel) => a.width > 0 && b.width > 0 && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + 16 && b.y < a.y + 16;
+  const ring = (n: number, width = 120) => spreadOffsets(n).map(o => ({ ...o, half: 14, width }));
+
+  it('never lets two names overlap, nor a name cover a marker', () => {
+    for (const n of [2, 3, 5, 8, 12]) {
+      const items = ring(n);
+      const ls = layoutSpreadLabels(items, circle);
+      for (let i = 0; i < ls.length; i++) for (let j = i + 1; j < ls.length; j++) expect(overlap(ls[i]!, ls[j]!)).toBe(false);
+      for (const l of ls) {
+        for (const m of items) {
+          // the marker's box must not intersect the label's box
+          const hit = l.x < m.dx + m.half && m.dx - m.half < l.x + l.width && l.y < m.dy + m.half && m.dy - m.half < l.y + 16;
+          expect(hit).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('keeps every name inside the radar circle, shortening long names', () => {
+    // The area point near the right edge of the radar: little room on the right.
+    const ls = layoutSpreadLabels(ring(6, 300), { cx: -120, cy: 0, r: 200 });
+    for (const l of ls) {
+      if (!l.width) continue;
+      for (const [x, y] of [[l.x, l.y], [l.x + l.width, l.y], [l.x, l.y + 16], [l.x + l.width, l.y + 16]] as const) {
+        expect(Math.hypot(x + 120, y)).toBeLessThanOrEqual(200);
+      }
+      expect(l.width).toBeLessThanOrEqual(150);
+    }
+  });
+
+  it('puts names on the side of their marker', () => {
+    const items = ring(4);
+    const ls = layoutSpreadLabels(items, circle);
+    ls.forEach((l, i) => expect(l.side).toBe(items[i]!.dx >= 0 ? 'right' : 'left'));
   });
 });
 

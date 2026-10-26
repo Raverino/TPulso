@@ -1,15 +1,16 @@
 // Stops on the map (docs/OFFLINE.md). The individual stop IDs are kept (for departures and vehicle filtering)
 // and never shown.
-// - Bus and tram stops become *platforms*: one stop, or stops on the same side of the street (within 15 m, same
-//   main direction of travel). Opposite directions are never merged; each platform knows its "other side".
-// - Metro, train and ferry stops of the same mode within 40 m become one *station* (all its platforms merged).
-// Stops are never merged by name alone, and never across modes.
+// - A *place* is the stops of one mode within 40 m of each other (metro, train and ferry: one station). It has
+//   one name: the most common stop name in the group (a tie goes to the shortest); other spellings are not shown.
+// - A bus/tram place whose stops serve opposite directions is split into one marker per direction (*platforms*),
+//   all with the place name; each knows its "other side". A place with one direction stays one marker.
+// Stops are never merged across modes.
 import { distanceMeters } from '../../shared/geo';
 import type { AreaFile } from '../../shared/timetable';
 import type { TransportMode } from '../../shared/types';
 import { pointAlong } from './engine';
 
-/** What a stop is served by, for grouping: bus/tram stops are split by direction, the others merged. */
+/** What a stop is served by, for grouping: bus/tram places are split by direction, the others never. */
 export type StopKind = 'bus' | 'tram' | 'metro' | 'train' | 'ferry';
 const DIRECTIONAL: ReadonlySet<StopKind> = new Set(['bus', 'tram']);
 
@@ -38,6 +39,7 @@ export interface StationStop {
 export interface Station {
   /** Smallest member stop id (stable, internal only). */
   id: string;
+  /** The place name (shared by both platforms of a split place). */
   name: string;
   /** Normalised name (area points count stations by name). */
   nameKey: string;
@@ -46,9 +48,9 @@ export interface Station {
   stopIds: string[];
   /** Modes serving any member stop, in a fixed order (bus, tram, train, ferry). */
   modes: TransportMode[];
-  /** A bus/tram platform (one direction) or a merged metro/train/ferry station. */
+  /** One direction of a split bus/tram place, or a whole place (one marker). */
   kind: 'platform' | 'station';
-  /** Platforms: main direction of travel, degrees clockwise from north (null if unknown). */
+  /** Platforms: main direction of travel, degrees clockwise from north. */
   heading: number | null;
   /** Platforms: the destination most trips leaving here go to. */
   towards: string | null;
@@ -56,13 +58,10 @@ export interface Station {
   otherSide: { id: string; towards: string | null } | null;
 }
 
-export const PLATFORM_MERGE_M = 15;
-export const STATION_MERGE_M = 40;
-/** Same side: main directions less than this apart. Other side: at least OPPOSITE_DEG apart. */
+export const PLACE_MERGE_M = 40;
+/** Directions less than this apart are one platform; a place splits only if two are at least OPPOSITE_DEG apart. */
 const SAME_DIRECTION_DEG = 60;
 const OPPOSITE_DEG = 120;
-/** An "other side" platform with the same name may be this far away (else STATION_MERGE_M). */
-const OTHER_SIDE_SAME_NAME_M = 80;
 const MODE_ORDER: TransportMode[] = ['bus', 'tram', 'train', 'ferry'];
 const FILLER = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
 
@@ -91,7 +90,7 @@ export function displayName(name: string): string {
 /**
  * Direction of travel and destinations at every stop of the loaded areas, from the patterns serving it:
  * the shape's heading just after the stop (just before it for a last stop), weighted by the number of trips.
- * `metroOperators` (region config) marks metro lines, which share the tram mode but are merged like trains.
+ * `metroOperators` (region config) marks metro lines, which share the tram mode but are grouped like trains.
  */
 export function stopDirections(areas: readonly AreaFile[], metroOperators: readonly string[]): Map<string, StopDirection> {
   const acc = new Map<string, { kinds: Set<StopKind>; x: number; y: number; weight: number; dests: Map<string, number> }>();
@@ -142,6 +141,17 @@ function unionFind(n: number) {
   return { find, join: (a: number, b: number) => void (parent[find(a)] = find(b)) };
 }
 
+function groupsOf<T>(items: readonly T[], find: (i: number) => number): T[][] {
+  const g = new Map<number, T[]>();
+  items.forEach((it, i) => {
+    const r = find(i);
+    const a = g.get(r);
+    if (a) a.push(it);
+    else g.set(r, [it]);
+  });
+  return [...g.values()];
+}
+
 function mostCommon(counts: Map<string, number>): string | null {
   const best = [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].length - y[0].length || x[0].localeCompare(y[0]))[0];
   return best ? best[0] : null;
@@ -150,120 +160,117 @@ function mostCommon(counts: Map<string, number>): string | null {
 export function groupStations(stops: readonly StationStop[]): Station[] {
   const kindOf = (s: StationStop): StopKind => s.dir?.kind ?? 'bus';
   const headingOfStop = (s: StationStop) => (s.dir ? headingOf(s.dir.x, s.dir.y, s.dir.weight) : null);
+
+  // 1. Places: stops of the same kind within 40 m (chained). A grid of ~50 m cells limits the pairs compared.
   const uf = unionFind(stops.length);
-  // Pairs only within the same kind; a grid of ~50 m cells keeps this from comparing every pair.
-  const cell = (s: StationStop) => `${Math.floor(s.lat / 0.00045)}|${Math.floor(s.lng / 0.00057)}`;
   const grid = new Map<string, number[]>();
+  const cellOf = (s: StationStop) => [Math.floor(s.lat / 0.00045), Math.floor(s.lng / 0.00057)] as const;
   stops.forEach((s, i) => {
-    const k = cell(s);
+    const [ci, cj] = cellOf(s);
+    const k = `${ci}|${cj}`;
     const a = grid.get(k);
     if (a) a.push(i);
     else grid.set(k, [i]);
   });
-  const neighbours = (s: StationStop): number[] => {
-    const ci = Math.floor(s.lat / 0.00045), cj = Math.floor(s.lng / 0.00057);
-    const out: number[] = [];
-    for (let di = -2; di <= 2; di++) for (let dj = -2; dj <= 2; dj++) out.push(...(grid.get(`${ci + di}|${cj + dj}`) ?? []));
-    return out;
-  };
   stops.forEach((a, i) => {
-    const ka = kindOf(a);
-    const ha = headingOfStop(a);
-    for (const j of neighbours(a)) {
-      if (j <= i) continue;
-      const b = stops[j]!;
-      if (kindOf(b) !== ka) continue;
-      const d = distanceMeters(a, b);
-      if (DIRECTIONAL.has(ka)) {
-        // Same platform: same side (≤ 15 m) and the same main direction (unknown direction: distance only).
-        const hb = headingOfStop(b);
-        if (d <= PLATFORM_MERGE_M && (ha === null || hb === null || angleBetween(ha, hb) < SAME_DIRECTION_DEG)) uf.join(i, j);
-      } else if (d <= STATION_MERGE_M) uf.join(i, j); // metro, train, ferry: one station
+    const [ci, cj] = cellOf(a);
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        for (const j of grid.get(`${ci + di}|${cj + dj}`) ?? []) {
+          if (j > i && kindOf(stops[j]!) === kindOf(a) && distanceMeters(a, stops[j]!) <= PLACE_MERGE_M) uf.join(i, j);
+        }
+      }
     }
   });
 
-  const groups = new Map<number, StationStop[]>();
-  stops.forEach((s, i) => {
-    const r = uf.find(i);
-    const g = groups.get(r);
-    if (g) g.push(s);
-    else groups.set(r, [s]);
-  });
-  const out: Station[] = [...groups.values()].map(members => {
-    // Name: the most common original name; on a tie, the shortest (usually without platform codes).
+  const out: Station[] = [];
+  for (const place of groupsOf(stops, uf.find)) {
+    // 2. One name per place: the most common stop name; a tie goes to the shortest.
     const names = new Map<string, number>();
-    for (const m of members) names.set(displayName(m.name), (names.get(displayName(m.name)) ?? 0) + 1);
+    for (const m of place) names.set(displayName(m.name), (names.get(displayName(m.name)) ?? 0) + 1);
     const name = mostCommon(names)!;
-    const modes = new Set<TransportMode>();
-    for (const m of members) for (const md of m.modes) modes.add(md);
-    const ids = members.map(m => m.id).sort();
-    const platform = DIRECTIONAL.has(kindOf(members[0]!));
-    let x = 0, y = 0, weight = 0;
-    const dests = new Map<string, number>();
-    for (const m of members) {
-      if (!m.dir) continue;
-      x += m.dir.x;
-      y += m.dir.y;
-      weight += m.dir.weight;
-      for (const [h, c] of m.dir.dests) dests.set(h, (dests.get(h) ?? 0) + c);
-    }
-    return {
-      id: ids[0]!,
-      name,
-      nameKey: normaliseName(name),
-      lat: members.reduce((s, m) => s + m.lat, 0) / members.length,
-      lng: members.reduce((s, m) => s + m.lng, 0) / members.length,
-      stopIds: ids,
-      modes: MODE_ORDER.filter(m => modes.has(m)),
-      kind: platform ? 'platform' : 'station',
-      heading: platform ? headingOf(x, y, weight) : null,
-      towards: platform ? mostCommon(dests) : null,
-      otherSide: null,
-    };
-  });
+    const nameKey = normaliseName(name);
 
-  // Other side: a platform of the same kind heading the opposite way — same name within 80 m, or any name
-  // within 40 m; the same name first, then the nearest.
-  const stopById = new Map(stops.map(s => [s.id, s]));
-  const kindOfStation = new Map(out.map(st => [st.id, kindOf(stopById.get(st.id)!)]));
-  const platforms = out.filter(st => st.kind === 'platform' && st.heading !== null);
-  // ~100 m cells: candidates are at most 80 m away, so the 3 × 3 cells around a platform hold them all.
-  const pcell = (lat: number, lng: number) => [Math.floor(lat / 0.0009), Math.floor(lng / 0.00115)] as const;
-  const pgrid = new Map<string, Station[]>();
-  for (const p of platforms) {
-    const [i, j] = pcell(p.lat, p.lng);
-    const k = `${i}|${j}`;
-    const a = pgrid.get(k);
-    if (a) a.push(p);
-    else pgrid.set(k, [p]);
+    // 3. Bus/tram: one platform per direction (directions < 60° apart join; a stop with no known direction
+    //    joins the busiest platform). Split only if two platforms run in opposite directions.
+    let parts: StationStop[][] = [place];
+    if (DIRECTIONAL.has(kindOf(place[0]!))) {
+      const known = place.filter(s => headingOfStop(s) !== null);
+      const unknown = place.filter(s => headingOfStop(s) === null);
+      const ud = unionFind(known.length);
+      known.forEach((a, i) => known.forEach((b, j) => j > i && angleBetween(headingOfStop(a)!, headingOfStop(b)!) < SAME_DIRECTION_DEG && ud.join(i, j)));
+      const dirs = groupsOf(known, ud.find);
+      const head = (g: StationStop[]) => headingOf(...sumDir(g));
+      const opposite = dirs.some((a, i) => dirs.some((b, j) => j > i && angleBetween(head(a)!, head(b)!) >= OPPOSITE_DEG));
+      if (opposite) {
+        const busiest = dirs.reduce((x, y) => (sumDir(y)[2] > sumDir(x)[2] ? y : x));
+        busiest.push(...unknown);
+        parts = dirs;
+      }
+    }
+
+    const split = parts.length > 1;
+    const platforms = parts.map((members): Station => {
+      const modes = new Set<TransportMode>();
+      for (const m of members) for (const md of m.modes) modes.add(md);
+      const ids = members.map(m => m.id).sort();
+      const dests = new Map<string, number>();
+      for (const m of members) for (const [h, c] of m.dir?.dests ?? []) dests.set(h, (dests.get(h) ?? 0) + c);
+      return {
+        id: ids[0]!,
+        name,
+        nameKey,
+        lat: members.reduce((s, m) => s + m.lat, 0) / members.length,
+        lng: members.reduce((s, m) => s + m.lng, 0) / members.length,
+        stopIds: ids,
+        modes: MODE_ORDER.filter(m => modes.has(m)),
+        kind: split ? 'platform' : 'station',
+        heading: split ? headingOf(...sumDir(members)) : null,
+        towards: split ? mostCommon(dests) : null,
+        otherSide: null,
+      };
+    });
+    if (split) linkOtherSides(platforms);
+    out.push(...platforms);
   }
-  const candidates: { a: Station; b: Station; score: number }[] = [];
+  return out;
+
+  function sumDir(g: readonly StationStop[]): [number, number, number] {
+    let x = 0, y = 0, w = 0;
+    for (const s of g) {
+      if (!s.dir) continue;
+      x += s.dir.x;
+      y += s.dir.y;
+      w += s.dir.weight;
+    }
+    return [x, y, w];
+  }
+}
+
+/**
+ * "Other side" within one place: the most opposite pairs first (then the nearest), each platform in one pair so
+ * the link works both ways; a platform left over (e.g. a third direction at a junction) links one way.
+ */
+function linkOtherSides(platforms: Station[]) {
+  const pairs: { a: Station; b: Station; score: number }[] = [];
   for (const a of platforms) {
-    const [ci, cj] = pcell(a.lat, a.lng);
-    const near: Station[] = [];
-    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) near.push(...(pgrid.get(`${ci + di}|${cj + dj}`) ?? []));
-    for (const b of near) {
-      if (b === a || kindOfStation.get(b.id) !== kindOfStation.get(a.id)) continue;
-      if (angleBetween(a.heading!, b.heading!) < OPPOSITE_DEG) continue;
-      const d = distanceMeters(a, b);
-      const sameName = a.nameKey === b.nameKey;
-      if (d > (sameName ? OTHER_SIDE_SAME_NAME_M : STATION_MERGE_M)) continue;
-      candidates.push({ a, b, score: (sameName ? 0 : 1000) + d });
+    for (const b of platforms) {
+      if (a === b || a.heading === null || b.heading === null) continue;
+      const angle = angleBetween(a.heading, b.heading);
+      if (angle < OPPOSITE_DEG) continue;
+      pairs.push({ a, b, score: (180 - angle) * 10 + distanceMeters(a, b) });
     }
   }
-  // Best pairs first, each platform in one pair, so the link works both ways (A ↔ B). A platform left over
-  // (e.g. three platforms at a junction) still links one way to its best opposite.
-  candidates.sort((x, y) => x.score - y.score || x.a.id.localeCompare(y.a.id) || x.b.id.localeCompare(y.b.id));
+  pairs.sort((x, y) => x.score - y.score || x.a.id.localeCompare(y.a.id) || x.b.id.localeCompare(y.b.id));
   const paired = new Set<string>();
-  for (const { a, b } of candidates) {
+  for (const { a, b } of pairs) {
     if (paired.has(a.id) || paired.has(b.id)) continue;
     paired.add(a.id);
     paired.add(b.id);
     a.otherSide = { id: b.id, towards: b.towards };
     b.otherSide = { id: a.id, towards: a.towards };
   }
-  for (const { a, b } of candidates) if (!a.otherSide) a.otherSide = { id: b.id, towards: b.towards };
-  return out;
+  for (const { a, b } of pairs) if (!a.otherSide) a.otherSide = { id: b.id, towards: b.towards };
 }
 
 /** Marker size in px from the number of departures in the next 10 minutes (clamped, so it stays tappable). */
@@ -321,4 +328,72 @@ export function spreadOffsets(n: number, minRadiusPx = 38, gapPx = 34): { dx: nu
     const a = -Math.PI / 2 + (2 * Math.PI * i) / n;
     return { dx: Math.round(r * Math.cos(a)), dy: Math.round(r * Math.sin(a)) };
   });
+}
+
+// ---- Names of a spread area point ------------------------------------------------------------------------
+
+export interface SpreadLabelItem {
+  /** Marker centre relative to the area point (screen px). */
+  dx: number;
+  dy: number;
+  /** Half the marker's size. */
+  half: number;
+  /** Width the full name needs (px, padding included). */
+  width: number;
+}
+
+export interface SpreadLabel {
+  /** Left edge and top of the label, relative to the area point (screen px). */
+  x: number;
+  y: number;
+  /** Width to give it (a longer name is shortened with an ellipsis). */
+  width: number;
+  side: 'left' | 'right';
+  /** Draw a thin line from the marker to the label (the label moved away from its marker's row). */
+  leader: boolean;
+}
+
+/**
+ * Radial name layout around a spread area point: names on the right half go in a column to the right of the
+ * ring of markers, the others to the left, each at its marker's height where possible. Within a column labels
+ * are pushed apart so they never overlap; every label starts outside the ring (it never covers a marker) and
+ * is narrowed to stay inside the radar circle (`circle`, relative to the area point).
+ */
+export function layoutSpreadLabels(
+  items: readonly SpreadLabelItem[],
+  circle: { cx: number; cy: number; r: number },
+  { height = 16, gap = 3, pad = 6, minWidth = 40, maxWidth = 150 } = {},
+): SpreadLabel[] {
+  // Radius that clears every marker box (corners included).
+  const ringR = Math.max(0, ...items.map(it => Math.hypot(it.dx, it.dy) + it.half * Math.SQRT2)) + pad;
+  const out: SpreadLabel[] = items.map(() => ({ x: 0, y: 0, width: 0, side: 'right', leader: false }));
+  const top = circle.cy - circle.r + 4, bottom = circle.cy + circle.r - 4;
+  for (const side of ['right', 'left'] as const) {
+    const idx = items.map((_, i) => i).filter(i => (side === 'right' ? items[i]!.dx >= 0 : items[i]!.dx < 0));
+    idx.sort((a, b) => items[a]!.dy - items[b]!.dy || a - b);
+    // Rows: each at its marker's height, pushed down to clear the previous one, then up to stay above `bottom`.
+    const ys = idx.map(i => items[i]!.dy - height / 2);
+    for (let k = 1; k < ys.length; k++) ys[k] = Math.max(ys[k]!, ys[k - 1]! + height + gap);
+    for (let k = ys.length - 1; k >= 0; k--) ys[k] = Math.min(ys[k]!, k === ys.length - 1 ? bottom - height : ys[k + 1]! - height - gap);
+    for (let k = 0; k < ys.length; k++) ys[k] = Math.max(ys[k]!, k === 0 ? top : ys[k - 1]! + height + gap);
+    idx.forEach((i, k) => {
+      const it = items[i]!;
+      const y = ys[k]!;
+      const mid = y + height / 2;
+      // Start outside the ring of markers at the label's widest row (so the label never covers one).
+      const nearest = y <= 0 && y + height >= 0 ? 0 : Math.min(Math.abs(y), Math.abs(y + height));
+      const clear = Math.sqrt(Math.max(0, ringR * ringR - nearest * nearest));
+      const start = Math.max(Math.abs(it.dx) + it.half + pad, clear);
+      // Room to the radar circle's edge at the label's worst row.
+      const dyMax = Math.max(Math.abs(y - circle.cy), Math.abs(y + height - circle.cy));
+      const halfChord = Math.sqrt(Math.max(0, circle.r * circle.r - dyMax * dyMax)) - 4;
+      const room = side === 'right' ? circle.cx + halfChord - start : start - (circle.cx - halfChord);
+      // Shortened (ellipsis) to the room left; with too little room for a readable name it is left out rather
+      // than cut off by the radar's edge.
+      const fitted = Math.min(it.width, maxWidth, room);
+      const width = fitted >= Math.min(minWidth, it.width) ? fitted : 0;
+      out[i] = { x: side === 'right' ? start : -start - width, y, width, side, leader: Math.abs(mid - it.dy) > 4 || start > Math.abs(it.dx) + it.half + pad + 2 };
+    });
+  }
+  return out;
 }
