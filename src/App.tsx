@@ -7,7 +7,7 @@ import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFro
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
 import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
-import { groupStations, stationSize } from "@/offline/stations";
+import { groupStations, stationSize, stopDirections } from "@/offline/stations";
 import {
   clockSec,
   distanceMeters,
@@ -80,6 +80,8 @@ interface Ride {
 
 interface AreaStop extends Stop {
   modes: Set<TransportMode>;
+  /** Direction of travel and destinations (bus/tram platforms are split by direction). */
+  dir?: ReturnType<typeof stopDirections> extends Map<string, infer D> ? D : never;
 }
 
 export default function App() {
@@ -189,8 +191,9 @@ export default function App() {
   // Stops of the loaded areas, with the modes serving them.
   const allStops = useMemo(() => {
     const m = new Map<string, AreaStop>();
+    const dirs = stopDirections(tt.areas, region.metroOperators);
     for (const a of tt.areas) {
-      for (const [id, name, lat, lng] of a.stops) if (!m.has(id)) m.set(id, { id, name, lat, lng, mode: "bus", modes: new Set() });
+      for (const [id, name, lat, lng] of a.stops) if (!m.has(id)) m.set(id, { id, name, lat, lng, mode: "bus", modes: new Set(), dir: dirs.get(id) });
       for (const p of a.patterns) for (const id of p.stops) m.get(id)?.modes.add(p.mode);
     }
     for (const s of m.values()) s.mode = s.modes.has("train") ? "train" : s.modes.has("tram") ? "tram" : s.modes.has("ferry") ? "ferry" : "bus";
@@ -300,6 +303,9 @@ export default function App() {
     return stations.map((st) => ({
       id: st.id,
       name: st.name,
+      nameKey: st.nameKey,
+      kind: st.kind,
+      heading: st.heading,
       lat: st.lat,
       lng: st.lng,
       modes: filter === "all" ? st.modes : st.modes.filter((m) => m === filter),
@@ -413,18 +419,28 @@ export default function App() {
     setPanelView(view);
   }, []);
   // A tapped station covers all of its stops (e.g. the six Marquês de Pombal platforms).
-  const tappedStation = selectedStopId ? stations.find((st) => st.id === selectedStopId) : undefined;
+  const tappedStation = selectedStopId ? allStations.find((st) => st.id === selectedStopId) : undefined;
   const stopPanel: StopPanel | null = useMemo(() => {
     if (!tappedStation || !manifest) return null;
-    const members = nearStops.filter((s) => tappedStation.stopIds.includes(s.id));
+    const ids = new Set(tappedStation.stopIds);
+    const members = allStops.filter((s) => ids.has(s.id));
     const rows = expired
       ? []
       : members
           .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
           .sort((a, b) => a.expectedAt - b.expectedAt);
-    const distanceM = Math.round(Math.min(...members.map((m) => m.distance)));
-    return { id: tappedStation.id, name: tappedStation.name, distanceM, departures: rows, fetchedAt: now, error: null };
-  }, [tappedStation, nearStops, manifest, expired, tt.areas, now, toLive]);
+    const distanceM = Math.round(Math.min(...members.map((m) => distanceMeters(center, m))));
+    return {
+      id: tappedStation.id,
+      name: tappedStation.name,
+      towards: tappedStation.towards,
+      otherSide: tappedStation.otherSide,
+      distanceM,
+      departures: rows,
+      fetchedAt: now,
+      error: null,
+    };
+  }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive]);
   const selectStop = useCallback(
     (id: string) => {
       setSelectedId(null);
@@ -949,6 +965,7 @@ export default function App() {
             note: expired ? "Timetable expired — connect to update." : tt.error,
           }}
           stop={stopPanel}
+          onSelectStop={selectStop}
           routeStatus={routeFile.status}
           help={help}
           tripStops={tripStops}

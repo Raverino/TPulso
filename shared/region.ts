@@ -13,6 +13,8 @@ export interface RegionConfig {
   defaultRadius: number;
   /** Modes our providers deliver real data for. Other modes are shown in the filter as "no data yet". */
   modesWithData: readonly TransportMode[];
+  /** Operators whose tram-mode lines are a metro: their stops are merged into stations like trains. */
+  metroOperators: readonly string[];
 }
 
 export const LISBON: RegionConfig = {
@@ -26,6 +28,8 @@ export const LISBON: RegionConfig = {
   defaultRadius: 200,
   // Carris Metropolitana (TML) runs buses only. Metro, trains and ferries: see docs/OPERATORS.md.
   modesWithData: ['bus'],
+  // Metro de Lisboa (manifest operator id): one station per metro stop, not one platform per direction.
+  metroOperators: ['metro'],
 };
 
 export function isInsideBounds(p: LatLng, b: RegionConfig['bounds']): boolean {

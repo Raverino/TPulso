@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import L from "leaflet";
 // TPulso: map rotation (compass). leafletGlobal must come first: the plugin patches the global L.
 import "@/lib/leafletGlobal";
@@ -32,10 +32,16 @@ const esc = (s: string) => s.replace(/[<>&"']/g, "");
 const HEX = /^#[0-9a-f]{6}$/i;
 const MODE_VAR: Record<TransportMode, string> = { bus: "var(--bus)", tram: "var(--tram)", train: "var(--train)", ferry: "var(--ferry)" };
 
-/** TPulso: a station on the map (one per physical station; see src/offline/stations.ts). */
+/** TPulso: a stop marker on the map: a bus/tram platform (one direction) or a metro/train/ferry station
+ * (src/offline/stations.ts). */
 export interface MapStation {
   id: string;
   name: string;
+  /** Normalised name: an area point counts its stations by name, not its platforms. */
+  nameKey: string;
+  kind: "platform" | "station";
+  /** Platforms: direction of travel (degrees clockwise from north), shown as a small arrow. */
+  heading: number | null;
   lat: number;
   lng: number;
   /** Modes shown in the ring (already filtered by the mode filter). */
@@ -60,9 +66,14 @@ export interface RouteStopMarker {
 }
 
 const stationIconCache = new Map<string, L.DivIcon>();
-/** Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. */
-function stationIcon(s: MapStation, selected: boolean, showLabel: boolean) {
-  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${showLabel ? s.name : ""}`;
+/**
+ * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. A platform has a
+ * small arrow for its direction of travel (it turns with the map: --bearing). The name is in the icon but only
+ * shown for the tapped station and on hover (desktop); see .station-label in styles.css.
+ */
+function stationIcon(s: MapStation, selected: boolean) {
+  const heading = s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
+  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
   const n = Math.max(1, s.modes.length);
@@ -74,7 +85,7 @@ function stationIcon(s: MapStation, selected: boolean, showLabel: boolean) {
     className: "",
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
-    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${showLabel ? `<span class="station-label">${esc(s.name)}</span>` : ""}</div>`,
+    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${heading !== null ? `<span class="station-arrow" style="--heading:${heading}deg"></span>` : ""}<span class="station-label">${esc(s.name)}</span></div>`,
   });
   stationIconCache.set(key, icon);
   return icon;
@@ -85,7 +96,7 @@ function stationIcon(s: MapStation, selected: boolean, showLabel: boolean) {
  * over 0.5 s, and back in when the area point collapses (closing).
  */
 function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean) {
-  const base = stationIcon(s, false, true);
+  const base = stationIcon(s, false);
   const o = base.options;
   return L.divIcon({
     ...o,
@@ -113,9 +124,6 @@ function routeStopIcon(r: RouteStopMarker) {
     html: `<div class="route-stop is-${r.state}" style="--line:${color};--line-text:${text}" title="${esc(r.name)}">${r.label ? `<span class="upcoming-eta lift">${esc(r.label)}</span>` : ""}</div>`,
   });
 }
-
-/** Names of stations show from this zoom on (and always for the tapped one). */
-const LABEL_ZOOM = 17.5;
 
 const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
@@ -231,6 +239,60 @@ const StationLayer = memo(function StationLayer({
   }, [map, spreadOpen]);
   const expanded = spread?.key ?? null;
 
+  // Labels (tapped station, hovered marker): keep each inside the radar circle — shift it sideways, or put it
+  // under the marker when there is no room above. Only one label can show at a time (the tapped station in
+  // station focus, else the hovered marker), so labels never overlap.
+  const placeLabels = useCallback((only?: Element) => {
+    const container = map.getContainer();
+    const root = container.parentElement;
+    if (!root) return;
+    const cs = getComputedStyle(root);
+    const box = root.getBoundingClientRect();
+    const cx = box.left + parseFloat(cs.getPropertyValue("--x")), cy = box.top + parseFloat(cs.getPropertyValue("--y"));
+    const r = parseFloat(cs.getPropertyValue("--r"));
+    if (!(r > 0)) return;
+    const labels = only ? [only] : [...container.querySelectorAll(".station.is-selected .station-label")];
+    for (const el of labels as HTMLElement[]) {
+      el.style.setProperty("--lx", "0px");
+      el.classList.remove("is-below");
+      const fit = (): number | null => {
+        const b = el.getBoundingClientRect();
+        const dy = Math.max(Math.abs(b.top - cy), Math.abs(b.bottom - cy));
+        if (dy >= r - 2) return null;
+        const half = Math.sqrt(r * r - dy * dy) - 6; // the circle's width at the label's worst row
+        if (b.width > 2 * half) return null;
+        return b.left < cx - half ? cx - half - b.left : b.right > cx + half ? cx + half - b.right : 0;
+      };
+      let shift = fit();
+      if (shift === null) {
+        el.classList.add("is-below");
+        shift = fit();
+        if (shift === null) {
+          el.classList.remove("is-below");
+          shift = 0;
+        }
+      }
+      el.style.setProperty("--lx", `${Math.round(shift)}px`);
+    }
+  }, [map]);
+  useLayoutEffect(() => {
+    placeLabels();
+    const again = () => placeLabels();
+    map.on("moveend zoomend rotate resize", again);
+    return () => {
+      map.off("moveend zoomend rotate resize", again);
+    };
+  }, [map, placeLabels, selectedStopId, stations]);
+  const hoverHandlers = useMemo(
+    () => ({
+      mouseover: (e: L.LeafletMouseEvent) => {
+        const el = (e.target as L.Marker).getElement()?.querySelector(".station-label");
+        if (el) placeLabels(el);
+      },
+    }),
+    [placeLabels],
+  );
+
   const byId = useMemo(() => new Map(stations.map((s) => [s.id, s])), [stations]);
   const clusters = useMemo(() => {
     const pts = stations.map((s) => {
@@ -244,10 +306,9 @@ const StationLayer = memo(function StationLayer({
   if (selectedStopId) {
     const s = byId.get(selectedStopId);
     return s ? (
-      <Marker position={[s.lat, s.lng]} icon={stationIcon(s, true, true)} title={s.name} zIndexOffset={800} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+      <Marker position={[s.lat, s.lng]} icon={stationIcon(s, true)} zIndexOffset={800} eventHandlers={{ click: () => onSelectStop(s.id) }} />
     ) : null;
   }
-  const showLabels = zoom >= LABEL_ZOOM;
   return (
     <>
       {clusters.map((c) => {
@@ -255,19 +316,21 @@ const StationLayer = memo(function StationLayer({
         if (members.length === 1) {
           const s = members[0]!;
           return (
-            <Marker key={s.id} position={[s.lat, s.lng]} icon={stationIcon(s, false, showLabels)} title={s.name} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+            <Marker key={s.id} position={[s.lat, s.lng]} icon={stationIcon(s, false)} riseOnHover eventHandlers={{ click: () => onSelectStop(s.id), ...hoverHandlers }} />
           );
         }
         const key = c.members.join(",");
         const centre = map.unproject([c.x, c.y], zoom);
         if (expanded !== key) {
           const modes = MODE_ORDER.filter((m) => members.some((s) => s.modes.includes(m)));
+          // Counted by name: the two sides of a street (two platforms) are one station.
+          const named = new Set(members.map((s) => s.nameKey)).size;
           return (
             <Marker
               key={`area-${key}`}
               position={centre}
-              icon={areaIcon(modes, members.length)}
-              title={`${members.length} stations`}
+              icon={areaIcon(modes, named)}
+              title={`${named} station${named === 1 ? "" : "s"}`}
               zIndexOffset={100}
               eventHandlers={{ click: () => expand(key) }}
             />
@@ -297,9 +360,9 @@ const StationLayer = memo(function StationLayer({
                   <Marker
                     position={pos}
                     icon={spreadStationIcon(s, dx, dy, closing)}
-                    title={s.name}
                     zIndexOffset={3000}
-                    eventHandlers={{ click: () => onSelectStop(s.id) }}
+                    riseOnHover
+                    eventHandlers={{ click: () => onSelectStop(s.id), ...hoverHandlers }}
                   />
                 </Fragment>
               );

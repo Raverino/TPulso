@@ -68,6 +68,10 @@ function DelayText({ delayMin }: { delayMin: number }) {
 export interface StopPanel {
   id: string;
   name: string;
+  /** Bus/tram platform: the main destination of the trips leaving it. */
+  towards?: string | null;
+  /** Bus/tram platform: the platform on the other side of the street. */
+  otherSide?: { id: string; towards: string | null } | null;
   distanceM: number;
   /** null while loading */
   departures: LiveDeparture[] | null;
@@ -109,6 +113,8 @@ interface Props {
   /** Expanded departure rows (by row id) and their trip stops. Toggling never touches the map. */
   tripStops?: Record<string, TripStopsView>;
   onToggleTrip?: (rowId: string) => void;
+  /** Select another stop (a platform's "Other side" link). */
+  onSelectStop?: (id: string) => void;
 }
 
 /** TPulso: a departure row's trip, expanded: its upcoming stops (same data as the vehicle panel). */
@@ -177,6 +183,7 @@ export default function ArrivalsDrawer({
   ride = null,
   tripStops = {},
   onToggleTrip,
+  onSelectStop,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -409,7 +416,7 @@ export default function ArrivalsDrawer({
           {panelView === "help" ? (
             <HelpPanel onClose={onPanelClose} info={help} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
-            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} />
+            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} onSelectStop={onSelectStop} />
           ) : back ? (
             <VehicleDetails
               v={back.v}
@@ -756,12 +763,14 @@ function StopDetails({
   onClose,
   tripStops,
   onToggleTrip,
+  onSelectStop,
 }: {
   s: StopPanel;
   now: number;
   onClose: (() => void) | undefined;
   tripStops: Record<string, TripStopsView>;
   onToggleTrip?: ((rowId: string) => void) | undefined;
+  onSelectStop?: ((id: string) => void) | undefined;
 }) {
   const ageSec = s.fetchedAt ? (now - s.fetchedAt) / 1000 : 0;
   return (
@@ -772,8 +781,21 @@ function StopDetails({
           <MapPin className="size-5" />
         </span>
         <div className="min-w-0">
-          <div className="font-display text-lg font-bold leading-tight">{s.name}</div>
+          <div className="font-display text-lg font-bold leading-tight">
+            {s.name}
+            {/* TPulso: a bus/tram platform is one direction: say which */}
+            {s.towards && <span className="block text-sm font-semibold text-foreground/80">towards {s.towards}</span>}
+          </div>
           <div className="text-[11px] text-muted-foreground">{s.distanceM} m away · next 10 min</div>
+          {s.otherSide && onSelectStop && (
+            <button
+              type="button"
+              onClick={() => onSelectStop(s.otherSide!.id)}
+              className="mt-1 text-left text-xs font-bold text-primary underline-offset-2 hover:underline"
+            >
+              Other side{s.otherSide.towards ? `: towards ${s.otherSide.towards}` : ""} →
+            </button>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-2 pb-3">

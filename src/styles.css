@@ -528,11 +528,15 @@
   background: var(--radar);
   opacity: 0.35;
 }
+/* TPulso: a name shows only for the tapped station and on hover (desktop); kept inside the radar circle by
+   StationLayer (--lx shift, .is-below). */
 .station-label {
+  display: none;
   position: absolute;
   bottom: calc(50% + var(--size) / 2 + 2px);
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + var(--lx, 0px)));
+  z-index: 1;
   white-space: nowrap;
   padding: 1px 6px;
   border-radius: 9999px;
@@ -802,4 +806,31 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 }
 .compass-letter.is-north.is-pressed {
   opacity: 0.7;
+}
+
+.station.is-selected .station-label {
+  display: block;
+}
+@media (hover: hover) {
+  .leaflet-marker-icon:hover .station-label {
+    display: block;
+  }
+}
+.station-label.is-below {
+  bottom: auto;
+  top: calc(50% + var(--size) / 2 + 2px);
+}
+/* TPulso: a platform's direction of travel: a small arrow on its ring, turning with the map. */
+.station-arrow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  margin: -3px 0 0 -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 6px solid var(--foreground);
+  transform: rotate(calc(var(--heading) + var(--bearing, 0deg))) translateY(calc(-1 * (var(--size) / 2 + 3px)));
+  pointer-events: none;
 }
