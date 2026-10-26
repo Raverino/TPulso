@@ -112,21 +112,33 @@ export interface ExpectedVehicle {
   segment: { from: number; to: number; f: number };
 }
 
-interface Geo { pts: [number, number][]; cum: number[] }
+interface Geo { pts: [number, number][]; cum: number[]; box: [number, number, number, number] }
 const geoCache = new WeakMap<PatternData, Geo>();
 function geometry(p: PatternData): Geo {
   let g = geoCache.get(p);
   if (!g) {
     const pts = decodePolyline(p.shape);
     const cum = [0];
+    const box: Geo['box'] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [lat, lng] of pts) {
+      if (lat < box[0]) box[0] = lat;
+      if (lng < box[1]) box[1] = lng;
+      if (lat > box[2]) box[2] = lat;
+      if (lng > box[3]) box[3] = lng;
+    }
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1]!, b = pts[i]!;
       const k = Math.cos((a[0] * Math.PI) / 180);
       cum.push(cum[i - 1]! + Math.hypot((b[1] - a[1]) * k * 111_320, (b[0] - a[0]) * 111_320));
     }
-    geoCache.set(p, (g = { pts, cum }));
+    geoCache.set(p, (g = { pts, cum, box }));
   }
   return g;
+}
+
+/** Bounding box of a pattern slice's shape: [minLat, minLng, maxLat, maxLng] (cached). */
+export function patternBox(p: PatternData): readonly [number, number, number, number] {
+  return geometry(p).box;
 }
 
 /** Point and heading at `d` metres along a pattern slice's shape. */
@@ -138,8 +150,14 @@ export function pointAlong(p: PatternData, d: number): { lat: number; lng: numbe
   const total = cum[cum.length - 1]!;
   const span = p.dist[p.dist.length - 1]! || total;
   const x = Math.max(0, Math.min(total, (d / span) * total));
-  let i = 1;
-  while (i < cum.length - 1 && cum[i]! < x) i++;
+  // First shape point at or past x (binary search: this runs for every vehicle on every animation frame).
+  let lo = 1, hi = cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid]! < x) lo = mid + 1;
+    else hi = mid;
+  }
+  const i = lo;
   const a = pts[i - 1]!, b = pts[i]!;
   const seg = cum[i]! - cum[i - 1]! || 1;
   const f = Math.min(1, Math.max(0, (x - cum[i - 1]!) / seg));
@@ -148,59 +166,119 @@ export function pointAlong(p: PatternData, d: number): { lat: number; lng: numbe
   return { lat: a[0] + (b[0] - a[0]) * f, lng: a[1] + (b[1] - a[1]) * f, bearing };
 }
 
+/** A trip slice that runs in a time window: everything needed to place it at any moment, precomputed. */
+export interface ActiveTrip {
+  /** `${pattern}:${tripIndex}:${serviceDate}` */
+  key: string;
+  p: PatternData;
+  tripIndex: number;
+  serviceDate: string;
+  /** Trip start (ms, absolute). */
+  startMs: number;
+  /** Profile: [arrival, departure] offsets (s) from the trip start, per slice stop. */
+  pr: number[];
+  /** First departure and last arrival within this slice (ms, absolute). */
+  fromMs: number;
+  toMs: number;
+}
+
+/**
+ * All trip slices of the loaded areas that run at some moment between `fromMs` and `toMs`. Built once per
+ * refresh (e.g. every 2 s), so the per-frame work is only positionOf() on this short list.
+ */
+export function activeTrips(manifest: Pick<Manifest, 'window'>, areas: readonly AreaFile[], fromMs: number, toMs: number): ActiveTrip[] {
+  const days = [...new Map([...activeServiceDays(manifest, fromMs), ...activeServiceDays(manifest, toMs)].map(d => [d.date, d])).values()];
+  const out: ActiveTrip[] = [];
+  for (const a of areas) {
+    for (const p of a.patterns) {
+      const n = p.stops.length;
+      for (const d of days) {
+        for (let ti = 0; ti < p.trips.length; ti++) {
+          const [start, pi, mask] = p.trips[ti]!;
+          if (!(mask & d.bit)) continue;
+          const pr = p.profiles[pi]!;
+          const startMs = d.startMs + start * 1000;
+          const from = startMs + pr[1]! * 1000;
+          const to = startMs + pr[(n - 1) * 2]! * 1000;
+          if (to < fromMs || from > toMs) continue;
+          out.push({ key: `${p.id}:${ti}:${d.date}`, p, tripIndex: ti, serviceDate: d.date, startMs, pr, fromMs: from, toMs: to });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Share of a stop-to-stop segment spent speeding up after a stop, and slowing down before the next one. */
+const EASE_SHARE = 0.15;
+/**
+ * Trapezoid speed profile over a segment: accelerate over the first EASE_SHARE of the time, cruise, decelerate
+ * over the last EASE_SHARE. Returns the share of the distance covered at time share `t` (0..1). Symmetric:
+ * half the time = half the distance.
+ */
+export function easeAlong(t: number, r = EASE_SHARE): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const v = 1 / (1 - r); // cruise speed so the total distance is 1
+  if (t < r) return (v * t * t) / (2 * r);
+  if (t > 1 - r) return 1 - (v * (1 - t) * (1 - t)) / (2 * r);
+  return v * (t - r / 2);
+}
+
+/** Where the timetable says this trip slice is at `nowMs` (null outside the slice's time span). */
+export function positionOf(at: ActiveTrip, nowMs: number, ease = true): (ExpectedVehicle & { interior: boolean }) | null {
+  if (nowMs < at.fromMs || nowMs > at.toMs) return null;
+  const { p, pr } = at;
+  const n = p.stops.length;
+  const t = (nowMs - at.startMs) / 1000;
+  let i = 0;
+  while (i < n - 1 && t >= pr[(i + 1) * 2]!) i++; // i = last stop whose arrival has passed
+  let pos: { lat: number; lng: number; bearing: number };
+  let atStop = false;
+  let next = 0;
+  let f = 0;
+  if (t <= pr[i * 2 + 1]!) {
+    // Between arrival and departure at stop i: waiting there.
+    pos = pointAlong(p, p.dist[i]!);
+    atStop = true;
+    next = i;
+  } else {
+    const dep = pr[i * 2 + 1]!, arr = pr[(i + 1) * 2]!;
+    f = arr > dep ? (t - dep) / (arr - dep) : 1;
+    // Distance by arc length along the shape (pointAlong), with a short ease out of / into the stops.
+    const g = ease ? easeAlong(f) : f;
+    pos = pointAlong(p, p.dist[i]! + g * (p.dist[i + 1]! - p.dist[i]!));
+    next = i + 1;
+  }
+  if (!Number.isFinite(pos.lat)) return null;
+  return {
+    key: at.key, patternId: p.id, tripIndex: at.tripIndex, serviceDate: at.serviceDate, line: p.line, color: p.color, textColor: p.textColor,
+    mode: p.mode, op: p.op, headsign: p.headsign, lat: pos.lat, lng: pos.lng, bearing: pos.bearing, atStop, nextStopIndex: p.first + next,
+    segment: atStop ? { from: p.first + i, to: p.first + i, f: 0 } : { from: p.first + i, to: p.first + i + 1, f },
+    interior: next > 0 && next < n - 1,
+  };
+}
+
+/** Positions of a list of active trips at `nowMs`, one per trip (a slice where it is not on the edge preferred). */
+export function positionsAt(trips: readonly ActiveTrip[], nowMs: number, ease = true): ExpectedVehicle[] {
+  const out = new Map<string, ExpectedVehicle & { interior: boolean }>();
+  for (const at of trips) {
+    const v = positionOf(at, nowMs, ease);
+    if (!v) continue;
+    const prev = out.get(v.key);
+    if (prev && (prev.interior || !v.interior)) continue;
+    out.set(v.key, v);
+  }
+  return [...out.values()].map(({ interior: _i, ...v }) => v);
+}
+
 /**
  * Where the timetable says each vehicle is now: for every trip of every loaded slice, find the two scheduled
  * stops it is between and interpolate by time along the shape (or keep it at a stop while it waits there).
  * Trips outside their scheduled times are not shown.
  */
 export function expectedVehicles(manifest: Pick<Manifest, 'window'>, areas: readonly AreaFile[], nowMs: number): ExpectedVehicle[] {
-  const days = activeServiceDays(manifest, nowMs);
-  const out = new Map<string, ExpectedVehicle & { interior: boolean }>();
-  for (const a of areas) {
-    for (const p of a.patterns) {
-      const n = p.stops.length;
-      for (const d of days) {
-        const rel = (nowMs - d.startMs) / 1000;
-        for (let ti = 0; ti < p.trips.length; ti++) {
-          const [start, pi, mask] = p.trips[ti]!;
-          if (!(mask & d.bit)) continue;
-          const pr = p.profiles[pi]!;
-          const t = rel - start;
-          // Within this slice: from the first slice stop's departure to the last slice stop's arrival.
-          if (t < pr[1]! || t > pr[(n - 1) * 2]!) {
-            // Waiting at the very first stop of the trip before leaving is not "running".
-            continue;
-          }
-          let lat: number, lng: number, bearing: number, atStop = false, next = 0, f = 0;
-          let i = 0;
-          while (i < n - 1 && t >= pr[(i + 1) * 2]!) i++; // i = last stop whose arrival has passed
-          if (t <= pr[i * 2 + 1]!) {
-            // Between arrival and departure at stop i.
-            ({ lat, lng, bearing } = pointAlong(p, p.dist[i]!));
-            atStop = true;
-            next = i;
-          } else {
-            const dep = pr[i * 2 + 1]!, arr = pr[(i + 1) * 2]!;
-            f = arr > dep ? (t - dep) / (arr - dep) : 1;
-            ({ lat, lng, bearing } = pointAlong(p, p.dist[i]! + f * (p.dist[i + 1]! - p.dist[i]!)));
-            next = i + 1;
-          }
-          if (!Number.isFinite(lat)) continue;
-          const key = `${p.id}:${ti}:${d.date}`;
-          // The same trip appears in neighbouring areas' slices: prefer a slice where it is not on the edge.
-          const interior = next > 0 && next < n - 1;
-          const prev = out.get(key);
-          if (prev && (prev.interior || !interior)) continue;
-          out.set(key, {
-            key, patternId: p.id, tripIndex: ti, serviceDate: d.date, line: p.line, color: p.color, textColor: p.textColor,
-            mode: p.mode, op: p.op, headsign: p.headsign, lat, lng, bearing, atStop, nextStopIndex: p.first + next,
-            segment: atStop ? { from: p.first + i, to: p.first + i, f: 0 } : { from: p.first + i, to: p.first + i + 1, f }, interior,
-          });
-        }
-      }
-    }
-  }
-  return [...out.values()].map(({ interior: _i, ...v }) => v);
+  return positionsAt(activeTrips(manifest, areas, nowMs, nowMs), nowMs);
 }
 
 export interface ScheduledStop {

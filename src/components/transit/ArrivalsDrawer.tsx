@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
+import { useClock } from "@/lib/clock";
 import {
   ArrowLeft,
   Bus,
@@ -139,6 +140,14 @@ export interface Followed {
   vehicleDistM: number | null;
 }
 
+/**
+ * TPulso: a countdown label ("~3 min") that reads the shared clock itself and re-renders only when its text
+ * changes (about once a minute), so the 1 s tick never re-renders the lists around it.
+ */
+const Countdown = memo(function Countdown({ atSec, state }: { atSec: number; state: SourceState }) {
+  return <>{useClock((t) => countdownLabel(atSec, Math.floor(t / 1000), state), [atSec, state])}</>;
+});
+
 export default function ArrivalsDrawer({
   arrivals,
   radius,
@@ -173,7 +182,6 @@ export default function ArrivalsDrawer({
   const [showVeh, setShowVeh] = useState(true);
   const [showDep, setShowDep] = useState(true);
   const tap = (a: Arrival) => onOpen?.(openId === a.id ? null : a.id);
-  const nowSec = Math.floor(now / 1000);
   // Keep showing the last vehicle while the card flips back.
   const last = useRef<{
     v: Vehicle;
@@ -188,13 +196,12 @@ export default function ArrivalsDrawer({
   const back = last.current;
 
   return (
-    <aside className="relative min-h-0 flex-1 border-border bg-background [perspective:1400px] md:w-[360px] md:flex-none md:border-l">
-      <div
-        className="relative h-full w-full transition-transform duration-500 ease-out [transform-style:preserve-3d]"
-        style={{ transform: flipped ? "rotateY(180deg)" : "none" }}
-      >
+    <aside className="relative min-h-0 flex-1 overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l">
+      {/* TPulso: the detail panel slides and fades over the list (transform + opacity only, 220 ms; instant with
+          reduced motion). Both layers fill the same reserved space, so the map never resizes. */}
+      <div className="relative h-full w-full">
         <div
-          className={`absolute inset-0 flex flex-col bg-surface [backface-visibility:hidden] ${flipped ? "pointer-events-none" : ""}`}
+          className={`panel-layer absolute inset-0 flex flex-col bg-surface ${flipped ? "is-behind pointer-events-none" : ""}`}
           aria-hidden={flipped}
         >
           <div className="flex items-baseline justify-between border-b border-border px-4 py-2.5">
@@ -211,7 +218,7 @@ export default function ArrivalsDrawer({
             </p>
           </div>
 
-          {ride && <RideCard ride={ride} now={now} />}
+          {ride && <RideCard ride={ride} />}
 
           {followed && (
             <FollowCard
@@ -336,7 +343,7 @@ export default function ArrivalsDrawer({
                                 <div className="flex items-center justify-end gap-1.5 font-display text-sm font-bold leading-none text-primary">
                                   <SourceDot state={state} />
                                   <span className="tabular-nums">
-                                    {countdownLabel(at, nowSec, state)}
+                                    <Countdown atSec={at} state={state} />
                                   </span>
                                 </div>
                                 <div className="mt-0.5 text-[9px] text-muted-foreground">
@@ -396,7 +403,7 @@ export default function ArrivalsDrawer({
         </div>
 
         <div
-          className={`absolute inset-0 flex flex-col bg-surface [backface-visibility:hidden] [transform:rotateY(180deg)] ${flipped ? "" : "pointer-events-none"}`}
+          className={`panel-layer absolute inset-0 flex flex-col bg-surface ${flipped ? "" : "is-away pointer-events-none"}`}
           aria-hidden={!flipped}
         >
           {panelView === "help" ? (
@@ -695,7 +702,7 @@ function TripStopList({
               aria-label={`${SOURCE_TEXT[u.state]} ${countdownLabel(nowSec + u.etaS, nowSec, u.state)}`}
             >
               <SourceDot state={u.state} />
-              {countdownLabel(nowSec + u.etaS, nowSec, u.state)}
+              <Countdown atSec={nowSec + u.etaS} state={u.state} />
             </span>
           </li>
         );
@@ -756,7 +763,6 @@ function StopDetails({
   tripStops: Record<string, TripStopsView>;
   onToggleTrip?: ((rowId: string) => void) | undefined;
 }) {
-  const nowSec = Math.floor(now / 1000);
   const ageSec = s.fetchedAt ? (now - s.fetchedAt) / 1000 : 0;
   return (
     <div className="flex h-full flex-col">
@@ -803,7 +809,7 @@ function StopDetails({
                   <div className="shrink-0 text-right">
                     <div className="flex items-center justify-end gap-1.5 font-display text-sm font-bold leading-none text-primary">
                       <SourceDot state={state} />
-                      <span className="tabular-nums">{countdownLabel(Math.round(d.expectedAt / 1000), nowSec, state)}</span>
+                      <span className="tabular-nums"><Countdown atSec={Math.round(d.expectedAt / 1000)} state={state} /></span>
                     </div>
                     <div className="mt-0.5 text-[9px] text-muted-foreground">
                       {state === "stale" ? `last seen ${agoLabel(ageSec)} ago` : state === "scheduled" ? "scheduled" : <DelayText delayMin={Math.round(d.delaySec / 60)} />}
@@ -838,9 +844,8 @@ export interface RideInfo {
   onExit: () => void;
 }
 
-function RideCard({ ride, now }: { ride: RideInfo; now: number }) {
+function RideCard({ ride }: { ride: RideInfo }) {
   const Icon = ICONS[ride.mode];
-  const nowSec = Math.floor(now / 1000);
   const [next, ...rest] = ride.stops;
   return (
     <div className="mx-2 mt-2 rounded-xl border-2 border-dashed border-foreground/60 bg-surface-2/80 p-2.5">
@@ -873,7 +878,7 @@ function RideCard({ ride, now }: { ride: RideInfo; now: number }) {
               </div>
               <span className="flex shrink-0 items-center gap-1.5 font-display text-sm font-bold">
                 <SourceDot state="scheduled" />
-                {countdownLabel(Math.round(next.atMs / 1000), nowSec, "scheduled")}
+                <Countdown atSec={Math.round(next.atMs / 1000)} state="scheduled" />
               </span>
             </div>
           )}
@@ -882,7 +887,7 @@ function RideCard({ ride, now }: { ride: RideInfo; now: number }) {
               {rest.map((s, i) => (
                 <li key={`${i}-${s.name}`} className="flex justify-between gap-2">
                   <span className="truncate text-foreground/80">{s.name}</span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">{countdownLabel(Math.round(s.atMs / 1000), nowSec, "scheduled")}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground"><Countdown atSec={Math.round(s.atMs / 1000)} state="scheduled" /></span>
                 </li>
               ))}
             </ol>
@@ -923,7 +928,7 @@ function FollowCard({
 }) {
   const { pinned, dep, vehicle, vehicleDistM } = f;
   const Icon = ICONS[pinned.mode];
-  const mins = dep ? Math.max(0, Math.round((dep.expectedAt - Date.now()) / 60_000)) : null;
+  const mins = useClock((t) => (dep ? Math.max(0, Math.round((dep.expectedAt - t) / 60_000)) : null), [dep?.expectedAt]);
   const delayMin = dep ? Math.round(dep.delaySec / 60) : 0;
   const state: SourceState = dep ? depState(dep.realtime, boardAgeSec) : "stale";
   const selectable = vehicle && (canSelect?.(vehicle.id) ?? false);

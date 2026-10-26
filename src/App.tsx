@@ -2,7 +2,7 @@
 // are the original's. TPulso offline version: all data comes from the converted timetable files
 // (docs/OFFLINE.md) — Scheduled departures and Expected vehicle positions. No live API is called
 // (the live code is kept behind LIVE_ENABLED, off). Every TPulso change is marked "TPulso:".
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
@@ -31,9 +31,10 @@ import { addDays, decodePolyline, type AreaFile, type LineShape, type RouteFile 
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
-import { departuresAtStop, expectedVehicles, isExpired, routePath, tripStopsForRow, upcomingStops, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
+import { activeTrips, departuresAtStop, expectedVehicles, isExpired, positionsAt, routePath, tripStopsForRow, upcomingStops, type ActiveTrip, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
+import { clockNow, setSimClock, useClock } from "@/lib/clock";
 import { MODE_COLORS, MODE_TEXT } from "@/config";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
@@ -42,6 +43,8 @@ const region = LISBON;
 const RADII = region.radii as Radius[];
 /** Departures in the next 10 minutes, as in the original. */
 const WINDOW_MS = 600_000;
+/** Active trips are rebuilt every 30 s of (simulated) time. */
+const TRIP_STEP_MS = 30_000;
 
 // TPulso: Ferry added; modes without timetable data stay visible but disabled ("no data yet").
 const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
@@ -86,16 +89,27 @@ export default function App() {
   // The user's position (or the TEST point): the blue dot and where Recenter goes.
   const userCenter = loc.mode === "locating" ? { lat: region.testLocation.lat, lng: region.testLocation.lng } : loc.position;
   const hasCenter = loc.mode !== "locating";
-  // TPulso: the radar is computed for the map centre (the point under the screen-fixed circle), debounced while
-  // the user pans; it is the user's position until the map reports otherwise.
+  // TPulso: the radar is computed for the map centre (the point under the screen-fixed circle) once the map stops
+  // moving; it is the user's position until the map reports otherwise.
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null);
   const centerTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const centerWaitSince = useRef<number | null>(null);
   const onMapCenter = useCallback((c: { lat: number; lng: number }) => {
+    // Debounced 200 ms after the last move end, but never more than 1 s late (a ride's camera moves every frame).
     clearTimeout(centerTimer.current);
-    centerTimer.current = setTimeout(() => setMapCenter(c), 250);
+    const t = Date.now();
+    centerWaitSince.current ??= t;
+    const flush = () => {
+      centerWaitSince.current = null;
+      setMapCenter(c);
+    };
+    if (t - centerWaitSince.current >= 1000) flush();
+    else centerTimer.current = setTimeout(flush, 200);
   }, []);
   useEffect(() => () => clearTimeout(centerTimer.current), []);
-  const center = hasCenter && mapCenter ? mapCenter : userCenter;
+  const centerLat = hasCenter && mapCenter ? mapCenter.lat : userCenter.lat;
+  const centerLng = hasCenter && mapCenter ? mapCenter.lng : userCenter.lng;
+  const center = useMemo(() => ({ lat: centerLat, lng: centerLng }), [centerLat, centerLng]);
   const [testAccepted, setTestAccepted] = useState(false);
   const [recenterRequest, setRecenterRequest] = useState(0);
   const locate = useCallback(() => {
@@ -105,15 +119,14 @@ export default function App() {
 
   const [radius, setRadius] = useState<Radius>(region.defaultRadius as Radius);
   const [filter, setFilter] = useState<FilterMode>("all");
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const realNow = useMemo(() => Date.now(), [tick]); // eslint-disable-line react-hooks/exhaustive-deps
   // TPulso test ride (TEST mode only): a simulated clock, 1×/5×/10×, used for everything while riding.
   const [ride, setRide] = useState<Ride | null>(null);
-  const now = ride ? ride.baseSim + (realNow - ride.baseReal) * ride.speed : realNow;
+  useLayoutEffect(() => {
+    setSimClock(ride ? { baseSim: ride.baseSim, baseReal: ride.baseReal, speed: ride.speed } : null);
+  }, [ride?.baseSim, ride?.baseReal, ride?.speed, !ride]); // eslint-disable-line react-hooks/exhaustive-deps
+  // TPulso: the app itself re-renders every 5 s (lists, counts, vehicle selection). The header clock and every
+  // countdown label read the shared 1 s clock on their own (src/lib/clock.ts), so the tick re-renders only them.
+  const now = useClock((t) => Math.floor(t / 5000) * 5000);
   const nowSec = Math.floor(now / 1000);
   // Departure lists don't need recomputing every second: every 15 s (countdowns still tick each second).
   const boardNow = Math.floor(now / 15_000) * 15_000;
@@ -145,8 +158,8 @@ export default function App() {
   }, [ride, rideRoute, manifest, now]);
   // Trip over (no expected position any more): say so, then exit after 3 s.
   useEffect(() => {
-    if (ride && rideRoute && !ridePos && ride.endedAt === null) setRide({ ...ride, endedAt: realNow });
-  }, [ride, rideRoute, ridePos, realNow]);
+    if (ride && rideRoute && !ridePos && ride.endedAt === null) setRide({ ...ride, endedAt: Date.now() });
+  }, [ride, rideRoute, ridePos]);
   useEffect(() => {
     if (!ride?.endedAt) return;
     const t = setTimeout(() => exitRide(), 3000);
@@ -156,7 +169,9 @@ export default function App() {
   useEffect(() => {
     if (ride && gps !== "denied") exitRide();
   }, [gps]); // eslint-disable-line react-hooks/exhaustive-deps
-  const followPos = ride && ridePos ? { lat: ridePos.lat, lng: ridePos.lng } : userCenter;
+  const followLat = ride && ridePos ? ridePos.lat : userCenter.lat;
+  const followLng = ride && ridePos ? ridePos.lng : userCenter.lng;
+  const followPos = useMemo(() => ({ lat: followLat, lng: followLng }), [followLat, followLng]);
   const exploringM = Math.round(distanceMeters(center, followPos));
   const exploring = !ride && exploringM > 25;
   useEffect(() => {
@@ -189,12 +204,16 @@ export default function App() {
     [hasCenter, center.lat, center.lng, allStops, radius, filter],
   );
 
-  // TPulso: Expected vehicles — positions calculated from the timetable, recomputed every second.
-  const expected = useMemo(
-    () => (manifest && !expired ? expectedVehicles(manifest, tt.areas, now) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [manifest, expired, tt.areas, tick],
-  );
+  // Active trips of the loaded areas (+ the ridden route), rebuilt every 30 s of (simulated) time; the window
+  // reaches past the next rebuild, so the animation loop (clockNow, every frame) always has the running trips.
+  const tripBucket = Math.floor(now / TRIP_STEP_MS) * TRIP_STEP_MS;
+  const trips: ActiveTrip[] = useMemo(() => {
+    if (!manifest || expired) return [];
+    const areas = rideRoute ? [...tt.areas, { format: 1, version: manifest.version, area: "ride", stops: [], patterns: [rideRoute] } as AreaFile] : tt.areas;
+    return activeTrips(manifest, areas, tripBucket - 60_000, tripBucket + TRIP_STEP_MS + 60_000);
+  }, [manifest, expired, tt.areas, rideRoute, tripBucket]);
+  // Expected vehicles for lists, counts and selection: every 5 s from the same index (the map animates on its own).
+  const expected = useMemo(() => positionsAt(trips, now), [trips, now]);
   const toVehicle = useCallback(
     (v: ExpectedVehicle): Vehicle => ({
       id: v.key,
@@ -240,15 +259,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [center.lat, center.lng, opName],
   );
+  // Departures are cached per stop for each 15 s step, so moving the radar only computes stops that are new.
+  const depCache = useRef<{ key: string; areas: AreaFile[] | null; byStop: Map<string, ScheduledDeparture[]> }>({ key: "", areas: null, byStop: new Map() });
   const board: LiveDeparture[] | null = useMemo(() => {
-    if (!manifest || tt.loading) return tt.areas.length ? [] : null;
+    // While new map areas load, the current ones stay in use (no empty list flashing during a pan).
+    if (!manifest || !tt.areas.length) return manifest && !tt.loading ? [] : null;
     if (expired) return [];
-    return nearStops.flatMap((s) => departuresAtStop(manifest, tt.areas, s.id, boardNow - 30_000, boardNow + WINDOW_MS + 15_000).map((d) => toLive(d, s)));
+    const cacheKey = `${manifest.version}|${boardNow}`;
+    if (depCache.current.key !== cacheKey || depCache.current.areas !== tt.areas) depCache.current = { key: cacheKey, areas: tt.areas, byStop: new Map() };
+    const cache = depCache.current.byStop;
+    return nearStops.flatMap((s) => {
+      let rows = cache.get(s.id);
+      if (!rows) cache.set(s.id, (rows = departuresAtStop(manifest, tt.areas, s.id, boardNow - 30_000, boardNow + WINDOW_MS + 15_000)));
+      return rows.map((d) => toLive(d, s));
+    });
   }, [manifest, tt.loading, tt.areas, expired, nearStops, boardNow, toLive]);
 
   // TPulso: one marker per physical station (same normalised name within 60 m), sized by its departures in
   // the next 10 minutes and coloured by the modes serving it (already limited by the mode filter).
-  const stations = useMemo(() => groupStations(nearStops), [nearStops]);
+  const allStations = useMemo(
+    () => groupStations(allStops.filter((s) => filter === "all" || s.modes.has(filter as TransportMode))),
+    [allStops, filter],
+  );
+  const stations = useMemo(() => {
+    const inRadar = new Set(nearStops.map((s) => s.id));
+    return allStations.filter((st) => st.stopIds.some((id) => inRadar.has(id)));
+  }, [allStations, nearStops]);
   const mapStations: MapStation[] = useMemo(() => {
     const perStop = new Map<string, number>();
     for (const d of board ?? []) {
@@ -481,6 +517,26 @@ export default function App() {
     const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
     return expectedVehicles(manifest, [pseudo], now).filter((v) => stopTripKeys.has(v.key)).map(toVehicle);
   }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle]);
+  // The animation loop's trips: those of the loaded areas, plus (while a stop is open) the full routes coming to it.
+  const mapTrips = useMemo(() => {
+    if (!stopTripKeys || !manifest || expired) return trips;
+    const patterns = stopPatternIds.map((id) => routeFiles.get(id)).filter((r): r is RouteFile => !!r);
+    const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
+    return [...trips, ...activeTrips(manifest, [pseudo], tripBucket - 60_000, tripBucket + TRIP_STEP_MS + 60_000)];
+  }, [trips, stopTripKeys, manifest, expired, stopPatternIds, routeFiles, tripBucket]);
+  const vehicleFilter = useMemo(
+    () => ({ keys: selectedId ? new Set([selectedId]) : (stopTripKeys ?? (focusStop?.vehicleId ? new Set([focusStop.vehicleId]) : null)), mode: filter }),
+    [selectedId, stopTripKeys, focusStop?.vehicleId, filter],
+  );
+  const operatorName = useCallback((id: string) => opName.get(id) ?? id, [opName]);
+  const onMapSelect = useCallback(
+    (id: string | null) => {
+      // Empty-radar tap or re-tapping the selected vehicle: reset everything.
+      if (panelView !== "results" || id === null || id === selectedId) resetPanel();
+      else setSelectedId(id);
+    },
+    [panelView, selectedId, resetPanel],
+  );
 
   const routes = useMemo(() => {
     const m = new Map<string, TransitRoute>();
@@ -676,7 +732,7 @@ export default function App() {
           </p>
         </div>
 
-        <Clock now={now} />
+        <Clock />
         <div className="flex gap-0.5">
           <button
             onClick={() => openPanel("help")}
@@ -711,7 +767,7 @@ export default function App() {
                 disabled={!enabled}
                 title={enabled ? label : `${label} · no data yet`}
                 aria-label={enabled ? label : `${label}, no data yet`}
-                className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors ${
+                className={`flex min-w-11 items-center justify-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors ${
                   filter === key ? (key === "all" ? "bg-foreground text-background" : "") : enabled ? "text-foreground/70" : "cursor-not-allowed text-foreground/35"
                 }`}
                 // TPulso: chips use the mode colours (src/config.ts); the active chip is filled with its colour.
@@ -763,6 +819,11 @@ export default function App() {
                 center={center}
                 userPos={followPos}
                 riding={!!ride}
+                trips={mapTrips}
+                clock={clockNow}
+                vehicleFilter={vehicleFilter}
+                rideKey={ride?.key ?? null}
+                operatorName={operatorName}
                 onMapCenter={onMapCenter}
                 autoRecenter={!selectedId && panelView !== "stop"}
                 hasGps={gps === "granted"}
@@ -778,12 +839,7 @@ export default function App() {
                 selectedStopId={panelView === "stop" ? selectedStopId : null}
                 recenterRequest={recenterRequest}
                 baseLines={baseLines}
-                onSelect={(id) => {
-                  // Empty-radar tap or re-tapping the selected vehicle: reset everything.
-                  if (panelView !== "results" || id === null || id === selectedId) {
-                    resetPanel();
-                  } else setSelectedId(id);
-                }}
+                onSelect={onMapSelect}
               />
             ) : (
               <div className="grid h-full place-items-center text-muted-foreground">
@@ -915,11 +971,13 @@ export default function App() {
   );
 }
 
-function Clock({ now }: { now: number }) {
+/** TPulso: the only part of the app that re-renders every second (it reads the shared clock itself). */
+const Clock = memo(function Clock() {
+  const now = useClock((t) => Math.floor(t / 1000) * 1000);
   // TPulso: Europe/Lisbon time (the original showed nl-NL local time).
   return (
     <span className="rounded-xl bg-surface-2 px-2 py-1 font-display text-xs font-bold tabular-nums text-primary">
       {clockSec(now)}
     </span>
   );
-}
+});

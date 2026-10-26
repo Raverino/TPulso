@@ -208,8 +208,8 @@
   font-weight: 700;
   line-height: 1;
   border: 1px solid oklch(1 0 0 / 0.35);
-  box-shadow: 0 6px 16px -6px oklch(0 0 0 / 0.9);
-  transition: transform 0.9s linear;
+  /* TPulso: a crisp dark edge instead of a blurred drop shadow (blur is costly on a phone, ×60 markers) */
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.55);
 }
 
 .vehicle-pin span {
@@ -295,7 +295,7 @@
   background: var(--radar);
   color: oklch(0.16 0.025 258);
   font: 700 10px/1.4 "Space Grotesk", sans-serif;
-  box-shadow: 0 2px 6px oklch(0 0 0 / 0.4);
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.4);
 }
 
 /* Sonar hardware: only the radar disc shows the map, the rest is a bezel */
@@ -375,14 +375,10 @@
   z-index: 460;
 }
 
-/* Vehicles glide between 1 s simulation steps. */
+/* TPulso: no CSS glide — the animation loop sets the position every frame (a transition would lag behind it).
+   Only the moving markers (vehicles) get their own compositor layer. */
 .leaflet-marker-icon.vehicle-marker {
-  transition: transform 1s linear;
   will-change: transform;
-}
-.no-glide .leaflet-marker-icon.vehicle-marker,
-.leaflet-zoom-anim .leaflet-marker-icon.vehicle-marker {
-  transition: none;
 }
 
 /* Station countdown sits clear of the vehicle pin it may share a spot with */
@@ -593,4 +589,72 @@
   position: absolute;
   font: 800 12px/1 "Space Grotesk", sans-serif;
   color: var(--foreground);
+}
+
+/* --- TPulso: detail panel slides and fades over the list (transform + opacity only) ------------- */
+.panel-layer {
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 220ms ease-out,
+    visibility 0s;
+}
+.panel-layer.is-away {
+  transform: translateX(24px);
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s, 0s, 220ms; /* hide (stop painting) only after the slide-out */
+}
+.panel-layer.is-behind {
+  transform: translateX(-12px);
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s, 0s, 220ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-layer,
+  .panel-layer.is-away,
+  .panel-layer.is-behind {
+    transition: none;
+  }
+}
+
+/* --- TPulso: touch -------------------------------------------------------------------------------
+ * Every tappable control reacts on the first frame of the touch (.is-pressed is set on pointerdown by
+ * src/lib/pressed.ts, no :active delay), and every target is at least 44 × 44 px: small controls keep their
+ * look but get an invisible hit area around them. */
+@layer base {
+  button,
+  [role="button"] {
+    position: relative;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button::after,
+  [role="button"]::after {
+    content: "";
+    position: absolute;
+    top: min(0px, calc((100% - 44px) / 2));
+    bottom: min(0px, calc((100% - 44px) / 2));
+    left: min(0px, calc((100% - 44px) / 2));
+    right: min(0px, calc((100% - 44px) / 2));
+  }
+}
+button.is-pressed:not(:disabled),
+[role="button"].is-pressed {
+  transform: scale(0.95);
+  opacity: 0.8;
+  transition: none;
+}
+/* Map markers: the same invisible 44 px hit area and an instant press. */
+.vehicle-pin::after,
+.station::after {
+  content: "";
+  position: absolute;
+  top: min(0px, calc((100% - 44px) / 2));
+  bottom: min(0px, calc((100% - 44px) / 2));
+  left: min(0px, calc((100% - 44px) / 2));
+  right: min(0px, calc((100% - 44px) / 2));
+}
+.leaflet-marker-icon.is-pressed > * {
+  transform: scale(0.9);
 }

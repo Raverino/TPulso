@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
 import { applyThemeColors } from './config';
+import { installPressedState } from './lib/pressed';
 
 // The four mode colours and the radar colour come from src/config.ts (one place).
 applyThemeColors();
+installPressedState();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -16,7 +18,8 @@ createRoot(document.getElementById('root')!).render(
 // Offline support (docs/OFFLINE.md): keeps the app and the timetable on the device. Production builds only,
 // so the dev server always serves fresh files.
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('Offline support unavailable:', err));
-  });
+  const register = () => navigator.serviceWorker.register('/sw.js').catch(err => console.warn('Offline support unavailable:', err));
+  // The page may already have finished loading when this module runs; then 'load' never fires again.
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register);
 }

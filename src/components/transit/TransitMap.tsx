@@ -1,5 +1,4 @@
-import type React from "react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
@@ -15,8 +14,9 @@ import {
 } from "@/lib/transit";
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
-import { MAP_TILES } from "@/config";
+import { MAP_TILES, MODE_COLORS } from "@/config";
 import { clusterScreen, spreadOffsets } from "@/offline/stations";
+import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
   bus: "BUS",
@@ -115,30 +115,6 @@ function vehicleIcon(v: Vehicle) {
   return icon;
 }
 
-/** Turn off the glide while the map zooms/refits so markers don't slide across the screen. */
-function GlideGuard() {
-  const map = useMap();
-  useEffect(() => {
-    const el = map.getContainer();
-    let t: ReturnType<typeof setTimeout>;
-    const off = () => {
-      clearTimeout(t);
-      el.classList.add("no-glide");
-    };
-    const on = () => {
-      clearTimeout(t);
-      t = setTimeout(() => el.classList.remove("no-glide"), 80);
-    };
-    map.on("zoomstart movestart viewreset", off);
-    map.on("zoomend moveend", on);
-    return () => {
-      map.off("zoomstart movestart viewreset", off);
-      map.off("zoomend moveend", on);
-    };
-  }, [map]);
-  return null;
-}
-
 // TPulso: the ETA badge carries the stop time's source dot (Live / Scheduled / Estimated).
 function upcomingIcon(etaLabelText: string, name: string, state?: SourceState) {
   const safe = esc(name);
@@ -186,7 +162,7 @@ const MODE_ORDER: TransportMode[] = ["bus", "tram", "train", "ferry"];
  * clusterScreen). Tapping an area point spreads its stations on a small circle; tapping the background, zooming
  * or selecting something else collapses it again. In station focus only the selected station is shown.
  */
-function StationLayer({
+const StationLayer = memo(function StationLayer({
   stations,
   selectedStopId,
   onSelectStop,
@@ -264,7 +240,118 @@ function StationLayer({
       })}
     </>
   );
+});
+
+/** What the animation loop shows: exact keys (a focus), or everything of the mode filter inside the radar + margin. */
+export interface VehicleFilter {
+  /** Only these trip keys (focus modes); null = all within the radar + margin. */
+  keys: ReadonlySet<string> | null;
+  mode: FilterMode;
 }
+
+/**
+ * TPulso: one requestAnimationFrame loop for all vehicles. Each frame it computes every active trip's expected
+ * position from the clock (arc length along the shape, eased around stops — see engine.positionOf) and moves the
+ * Leaflet markers imperatively with setLatLng: no React re-render per frame and no CSS transition. In a test ride
+ * it sets the camera from the ridden vehicle's position in the same frame, so markers and map never drift apart.
+ * Only vehicles inside the radar plus a margin are animated. Paused while the tab is hidden.
+ */
+function VehicleAnimator({
+  trips,
+  clock,
+  filter,
+  radius,
+  rideKey,
+  onSelect,
+  operatorName,
+}: {
+  trips: readonly ActiveTrip[];
+  clock: () => number;
+  filter: VehicleFilter;
+  radius: number;
+  rideKey: string | null;
+  onSelect: (key: string) => void;
+  operatorName: (op: string) => string;
+}) {
+  const map = useMap();
+  const state = useRef({ trips, clock, filter, radius, rideKey, onSelect, operatorName });
+  state.current = { trips, clock, filter, radius, rideKey, onSelect, operatorName };
+
+  useEffect(() => {
+    const markers = new Map<string, L.Marker>();
+    let raf = 0;
+    let lastTs = -Infinity;
+    const frame = (ts: number) => {
+      raf = requestAnimationFrame(frame);
+      if (document.hidden) return;
+      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride } = state.current;
+      // Vehicles move a few metres per second: 20 updates a second look the same as 60 and cost a third.
+      // A ride's camera follows its vehicle every frame.
+      if (!ride && ts - lastTs < 50) return;
+      lastTs = ts;
+      const t = now();
+      const centre = map.getCenter();
+      const k = Math.cos((centre.lat * Math.PI) / 180);
+      const margin = r * 1.3; // radar + margin
+      const dLat = margin / 111_320, dLng = margin / (111_320 * k);
+      // Only trips whose shape comes near the radar (or the focused / ridden ones) are computed.
+      const near = list.filter((at) => {
+        if (at.key === ride) return true;
+        if (f.keys) return f.keys.has(at.key);
+        if (f.mode !== "all" && f.mode !== at.p.mode) return false;
+        const b = patternBox(at.p);
+        return b[0] <= centre.lat + dLat && b[2] >= centre.lat - dLat && b[1] <= centre.lng + dLng && b[3] >= centre.lng - dLng;
+      });
+      let shownList = positionsAt(near, t).map((v) => ({ v, d: Math.hypot((v.lat - centre.lat) * 111_320, (v.lng - centre.lng) * 111_320 * k) }));
+      if (!f.keys) shownList = shownList.filter((x) => x.d <= margin || x.v.key === ride);
+      // Cap the DOM markers: the nearest ones (the ridden one always) when a busy area has too many.
+      if (shownList.length > MAX_VEHICLE_MARKERS) shownList = shownList.sort((a, b) => (a.v.key === ride ? -1 : b.v.key === ride ? 1 : a.d - b.d)).slice(0, MAX_VEHICLE_MARKERS);
+      const seen = new Set<string>();
+      for (const { v } of shownList) {
+        if (v.key === ride) {
+          // Ride camera: same computed position, same frame, no animation. panBy (not setView) keeps Leaflet from
+          // re-projecting every layer each frame.
+          const p = map.latLngToContainerPoint([v.lat, v.lng]);
+          const c = map.getSize().divideBy(2);
+          if (Math.abs(p.x - c.x) + Math.abs(p.y - c.y) > 0.5) map.panBy([p.x - c.x, p.y - c.y], { animate: false });
+        }
+        seen.add(v.key);
+        const m = markers.get(v.key);
+        if (m) m.setLatLng([v.lat, v.lng]);
+        else {
+          const veh: Vehicle = {
+            id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
+            lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
+          };
+          const marker = L.marker([v.lat, v.lng], {
+            icon: vehicleIcon(veh),
+            title: `${v.line} → ${v.headsign || "—"} · Expected position (timetable)`,
+            zIndexOffset: v.key === ride ? 1500 : 600,
+          });
+          marker.on("click", () => state.current.onSelect(v.key));
+          marker.addTo(map);
+          markers.set(v.key, marker);
+        }
+      }
+      for (const [key, m] of markers) {
+        if (!seen.has(key)) {
+          m.remove();
+          markers.delete(key);
+        }
+      }
+    };
+    raf = requestAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(raf);
+      for (const m of markers.values()) m.remove();
+      markers.clear();
+    };
+  }, [map]);
+  return null;
+}
+
+/** At most this many vehicle markers in the DOM (the nearest to the radar centre). */
+const MAX_VEHICLE_MARKERS = 60;
 
 /** Return to the user's position this long after the last drag/zoom/touch ends. */
 export const AUTO_RECENTER_MS = 1_000;
@@ -291,7 +378,7 @@ function MapController({
   radius: number;
   recenterSignal: number;
   autoRecenter: boolean;
-  /** Test ride: the map follows userPos (the vehicle) on every update. */
+  /** Test ride: the camera is driven by the animation loop (it follows the vehicle every frame). */
   follow: boolean;
   onCenter: (c: LatLng) => void;
 }) {
@@ -335,12 +422,14 @@ function MapController({
   useEffect(() => {
     fitAt(exploring.current ? map.getCenter() : latest.current.userPos, false);
   }, [radius, fitAt, map]);
-  // New position: follow it only while not exploring — or always during a test ride (the map follows the vehicle).
+  // New position: follow it only while not exploring. During a test ride the animation loop sets the camera
+  // every frame from the vehicle's computed position, so nothing is animated here (no fighting the markers).
   useEffect(() => {
     if (follow) {
       exploring.current = false;
-      map.panTo([userPos.lat, userPos.lng], { animate: true, duration: 0.9 });
-    } else if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
+      return;
+    }
+    if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
   }, [userPos.lat, userPos.lng, map, follow]);
   // Recenter button: immediately.
   useEffect(() => {
@@ -381,7 +470,9 @@ function MapController({
     const moveEnd = () => {
       if (exploring.current) schedule();
     };
-    map.on("move", report);
+    // Reported when a move ends (not on every frame of a drag or pinch): the radar contents, stations and
+    // clusters are recomputed once the map stops.
+    map.on("moveend", report);
     map.on("dragstart drag", byHand);
     map.on("zoomstart", pinch);
     map.on("moveend zoomend", moveEnd);
@@ -396,7 +487,7 @@ function MapController({
     report();
     return () => {
       cancel();
-      map.off("move", report);
+      map.off("moveend", report);
       map.off("dragstart drag", byHand);
       map.off("zoomstart", pinch);
       map.off("moveend zoomend", moveEnd);
@@ -423,12 +514,18 @@ interface Props {
   center: LatLng;
   /** The user's real position (or the TEST point): the blue dot, and where Recenter goes. */
   userPos: LatLng;
-  /** Map centre changes (while panning/zooming). */
+  /** Map centre changes (when a pan or zoom ends). */
   onMapCenter: (c: LatLng) => void;
   /** Automatic return after the interaction ends is allowed (not while a vehicle or stop is selected, or riding). */
   autoRecenter: boolean;
   /** Test ride: the map follows the ridden vehicle and the user dot is hidden (the vehicle is the user). */
   riding: boolean;
+  /** Animation: active trips, the (ride) clock, which vehicles to show, and the ridden trip. */
+  trips: readonly ActiveTrip[];
+  clock: () => number;
+  vehicleFilter: VehicleFilter;
+  rideKey: string | null;
+  operatorName: (op: string) => string;
   hasGps: boolean;
   radius: number;
   filter: FilterMode;
@@ -466,7 +563,7 @@ function ClearOnMapClick({ onClear }: { onClear: () => void }) {
 }
 
 /** TPulso: the radar overlay sits at the screen centre; its radius is `radius` metres at the map centre. */
-function SonarGeometry({ radius, onChange }: { radius: number; onChange: (g: { x: number; y: number; r: number }) => void }) {
+function SonarGeometry({ radius, disc, bezel }: { radius: number; disc: RefObject<HTMLDivElement | null>; bezel: RefObject<HTMLDivElement | null> }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
@@ -474,23 +571,51 @@ function SonarGeometry({ radius, onChange }: { radius: number; onChange: (g: { x
       const c = map.getCenter();
       const p = map.latLngToContainerPoint(c);
       const edge = map.latLngToContainerPoint(c.toBounds(radius * 2).getNorthEast());
-      onChange({ x: size.x / 2, y: size.y / 2, r: Math.abs(p.y - edge.y) });
+      const x = size.x / 2, y = size.y / 2, r = Math.abs(p.y - edge.y);
+      // Written straight to the two overlay elements: no React render on zoom frames.
+      const d = disc.current;
+      if (d) Object.assign(d.style, { left: `${x - r}px`, top: `${y - r}px`, width: `${r * 2}px`, height: `${r * 2}px` });
+      const b = bezel.current;
+      if (b) {
+        b.style.setProperty("--x", `${x}px`);
+        b.style.setProperty("--y", `${y}px`);
+        b.style.setProperty("--r", `${r}px`);
+      }
     };
     update();
-    map.on("move zoom zoomanim resize viewreset", update);
+    // Only zoom, resize and the end of a move change it — never every frame of a move.
+    map.on("zoom zoomanim resize viewreset moveend", update);
     return () => {
-      map.off("move zoom zoomanim resize viewreset", update);
+      map.off("zoom zoomanim resize viewreset moveend", update);
     };
-  }, [map, radius, onChange]);
+  }, [map, radius, disc, bezel]);
   return null;
 }
 
-export default function TransitMap({
+/**
+ * TPulso: route line styles (colours from src/config.ts). Constant objects, so react-leaflet never re-styles
+ * a line just because the map re-rendered.
+ */
+const ROUND = { lineCap: "round", lineJoin: "round" } as const;
+const perMode = <T,>(f: (m: TransportMode) => T) =>
+  Object.fromEntries((["bus", "tram", "train", "ferry"] as const).map((m) => [m, f(m)])) as Record<TransportMode, T>;
+const LINE_STYLE = {
+  base: perMode((m) => ({ weight: 2.5, opacity: 0.35, color: MODE_COLORS[m], ...ROUND })),
+  casing: [false, true].map((sel) => ({ weight: sel ? 8 : 6, opacity: 0.7, color: "#0b0f19", ...ROUND })),
+  route: [false, true].map((sel) => perMode((m) => ({ weight: sel ? 4 : 3, opacity: sel ? 0.9 : 0.75, color: MODE_COLORS[m], ...ROUND }))),
+};
+
+export default memo(function TransitMap({
   center,
   userPos,
   onMapCenter,
   autoRecenter,
   riding,
+  trips,
+  clock,
+  vehicleFilter,
+  rideKey,
+  operatorName,
   hasGps,
   radius,
   filter,
@@ -506,7 +631,10 @@ export default function TransitMap({
   recenterRequest,
   baseLines,
 }: Props) {
-  const [geo, setGeo] = useState({ x: 0, y: 0, r: 0 });
+  const discRef = useRef<HTMLDivElement>(null);
+  const bezelRef = useRef<HTMLDivElement>(null);
+  // One canvas for all route lines (cheaper than hundreds of SVG paths; smoothFactor stays 0).
+  const lineRenderer = useMemo(() => L.canvas({ padding: 0.3 }), []);
   // Recenter shows while the radar centre (map centre) is away from the user.
   const away = Math.hypot((center.lat - userPos.lat) * 111_320, (center.lng - userPos.lng) * 111_320 * Math.cos((center.lat * Math.PI) / 180)) > 25;
   const [recenterSignal, setRecenterSignal] = useState(0);
@@ -563,7 +691,6 @@ export default function TransitMap({
       {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
       <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} className={MAP_TILES.className} />
       <MapController userPos={userPos} radius={radius} recenterSignal={recenterSignal} autoRecenter={autoRecenter && !riding} follow={riding} onCenter={onMapCenter} />
-      <GlideGuard />
       <ClearOnMapClick onClear={clear} />
 
 
@@ -605,9 +732,9 @@ export default function TransitMap({
         <Polyline
           key={`base-${r.id}`}
           positions={r.path}
-          className={`route-line route-${r.mode}`}
-          pathOptions={{ weight: 2.5, opacity: 0.35, color: "currentColor", lineCap: "round", lineJoin: "round" }}
+          pathOptions={LINE_STYLE.base[r.mode]}
           smoothFactor={0}
+          renderer={lineRenderer}
           interactive={false}
         />
       ))}
@@ -616,8 +743,9 @@ export default function TransitMap({
         <Polyline
           key={`casing-${r.id}`}
           positions={r.path}
-          pathOptions={{ weight: selected ? 8 : 6, opacity: 0.7, color: "#0b0f19", lineCap: "round", lineJoin: "round" }}
+          pathOptions={LINE_STYLE.casing[selected ? 1 : 0]}
           smoothFactor={0}
+          renderer={lineRenderer}
           interactive={false}
         />
       ))}
@@ -625,41 +753,28 @@ export default function TransitMap({
         <Polyline
           key={`route-${r.id}`}
           positions={r.path}
-          className={`route-line route-${r.mode}`}
-          pathOptions={{ weight: selected ? 4 : 3, opacity: selected ? 0.9 : 0.75, color: "currentColor", lineCap: "round", lineJoin: "round" }}
+          pathOptions={LINE_STYLE.route[selected ? 1 : 0]![r.mode]}
           smoothFactor={0}
+          renderer={lineRenderer}
           interactive={false}
         />
       ))}
 
-      {visibleVehicles.map((v) => {
-        return (
-          <Marker
-            key={v.id}
-            position={[v.lat, v.lng]}
-            icon={vehicleIcon(v)}
-            title={`${v.line} → ${v.headsign || "—"} · Expected position (timetable)`}
-            eventHandlers={{
-              click: () => onSelect(v.id),
-            }}
-          >
-
-          </Marker>
-        );
-      })}
-      <SonarGeometry radius={radius} onChange={setGeo} />
+      {/* TPulso: vehicles are animated imperatively by one requestAnimationFrame loop (no React per frame). */}
+      <VehicleAnimator
+        trips={trips}
+        clock={clock}
+        filter={vehicleFilter}
+        radius={radius}
+        rideKey={rideKey}
+        onSelect={onSelect}
+        operatorName={operatorName}
+      />
+      <SonarGeometry radius={radius} disc={discRef} bezel={bezelRef} />
     </MapContainer>
       {/* TPulso: the radar disc and bezel are a screen overlay; they never capture drags or taps. */}
-      <div
-        className="radar-disc"
-        style={{ left: geo.x - geo.r, top: geo.y - geo.r, width: geo.r * 2, height: geo.r * 2 }}
-        aria-hidden
-      />
-      <div
-        className="sonar-bezel"
-        style={{ "--x": `${geo.x}px`, "--y": `${geo.y}px`, "--r": `${geo.r}px` } as React.CSSProperties}
-        aria-hidden
-      />
+      <div ref={discRef} className="radar-disc" aria-hidden />
+      <div ref={bezelRef} className="sonar-bezel" aria-hidden />
       {/* TPulso additions: missing tile key notice and the Recenter button while exploring. */}
       {MAP_TILES.problem && (
         <p className="pointer-events-none absolute left-1/2 top-2 z-[480] -translate-x-1/2 rounded-lg bg-surface/90 px-2 py-1 text-center text-[10px] text-muted-foreground">
@@ -678,4 +793,4 @@ export default function TransitMap({
       )}
     </div>
   );
-}
+});

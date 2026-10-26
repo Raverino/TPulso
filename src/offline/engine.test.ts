@@ -5,7 +5,7 @@ import { serviceDayStartMs, type AreaFile, type Manifest, type RouteFile } from 
 import { convert } from '../../scripts/timetable/convert';
 import { folderSource } from '../../scripts/timetable/gtfs';
 import { OPERATORS } from '../../scripts/timetable/operators';
-import { departuresAtStop, expectedVehicles, isExpired, pointAlong, routePath, tripStopsForRow, upcomingStops } from './engine';
+import { activeTrips, departuresAtStop, easeAlong, expectedVehicles, isExpired, pointAlong, positionsAt, routePath, tripStopsForRow, upcomingStops } from './engine';
 
 const TODAY = '20261025';
 const manifest: Pick<Manifest, 'window'> = { window: { first: TODAY, days: 14 } };
@@ -138,5 +138,22 @@ describe('tripStopsForRow', () => {
     expect(t.nextIndex).toBe(0);
     expect(t.stops).toHaveLength(route3715.stops.length);
     expect(t.yourIndex).toBe(3);
+  });
+});
+
+describe('animation helpers', () => {
+  it('eases out of and into stops, symmetric, ending exactly at the stops', () => {
+    expect(easeAlong(0)).toBe(0);
+    expect(easeAlong(1)).toBe(1);
+    expect(easeAlong(0.5)).toBeCloseTo(0.5, 10);
+    expect(easeAlong(0.05)).toBeLessThan(0.05); // slower just after a stop
+    expect(easeAlong(0.95)).toBeGreaterThan(0.95); // slower just before the next stop
+    for (let t = 0.01; t <= 1; t += 0.01) expect(easeAlong(t)).toBeGreaterThanOrEqual(easeAlong(t - 0.01)); // never goes back
+  });
+  it('gives the same vehicles from the active-trip index as from a full scan', async () => {
+    const { areas } = await setup();
+    const now = at(8, 50);
+    const idx = activeTrips(manifest, areas, now - 60_000, now + 60_000);
+    expect(positionsAt(idx, now).map(v => v.key).sort()).toEqual(expectedVehicles(manifest, areas, now).map(v => v.key).sort());
   });
 });
