@@ -1,5 +1,5 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
@@ -16,6 +16,7 @@ import {
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES } from "@/config";
+import { clusterScreen, spreadOffsets } from "@/offline/stations";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
   bus: "BUS",
@@ -38,6 +39,8 @@ export interface MapStation {
   modes: TransportMode[];
   /** Ring size in px (scaled by departures in the next 10 minutes). */
   size: number;
+  /** Departures in the next 10 minutes (busier stations seed the area points). */
+  departures: number;
 }
 
 /** TPulso: a stop of the selected vehicle, in its mode colour. */
@@ -87,11 +90,6 @@ function routeStopIcon(r: RouteStopMarker) {
 
 /** Names of stations show from this zoom on (and always for the tapped one). */
 const LABEL_ZOOM = 17.5;
-function ZoomWatch({ onZoom }: { onZoom: (z: number) => void }) {
-  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
-  useEffect(() => onZoom(map.getZoom()), [map, onZoom]);
-  return null;
-}
 
 const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
@@ -160,6 +158,114 @@ const locateIcon = L.divIcon({
   html: `<div class="locate-dot"></div>`,
 });
 
+const areaIconCache = new Map<string, L.DivIcon>();
+/** Area point: a ring split into the colours of its modes, with the number of stations inside. */
+function areaIcon(modes: TransportMode[], count: number) {
+  const key = `${modes.join(",")}|${count}`;
+  const hit = areaIconCache.get(key);
+  if (hit) return hit;
+  const n = Math.max(1, modes.length);
+  const ring = modes.length > 1
+    ? `conic-gradient(${modes.map((m, i) => `${MODE_VAR[m]} ${(i * 100) / n}% ${((i + 1) * 100) / n}%`).join(", ")})`
+    : MODE_VAR[modes[0] ?? "bus"];
+  const icon = L.divIcon({
+    className: "",
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    html: `<div class="station area-point" style="--size:32px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span><span class="area-count">${count}</span></div>`,
+  });
+  areaIconCache.set(key, icon);
+  return icon;
+}
+
+const MODE_ORDER: TransportMode[] = ["bus", "tram", "train", "ferry"];
+
+/**
+ * TPulso: stations on the map in two levels. Level 1 (one marker per station) comes from App; level 2 groups
+ * station markers closer than 45 px on screen at the current zoom into area points (deterministic, see
+ * clusterScreen). Tapping an area point spreads its stations on a small circle; tapping the background, zooming
+ * or selecting something else collapses it again. In station focus only the selected station is shown.
+ */
+function StationLayer({
+  stations,
+  selectedStopId,
+  onSelectStop,
+  collapseKey,
+}: {
+  stations: MapStation[];
+  selectedStopId: string | null;
+  onSelectStop: (id: string) => void;
+  /** Changes when something else is selected: collapse any spread area point. */
+  collapseKey: string;
+}) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
+  const [expanded, setExpanded] = useState<string | null>(null);
+  useMapEvents({
+    zoomstart: () => setExpanded(null),
+    zoomend: () => setZoom(map.getZoom()),
+    click: () => setExpanded(null),
+  });
+  useEffect(() => setExpanded(null), [collapseKey]);
+
+  const byId = useMemo(() => new Map(stations.map((s) => [s.id, s])), [stations]);
+  const clusters = useMemo(() => {
+    const pts = stations.map((s) => {
+      const p = map.project([s.lat, s.lng], zoom);
+      return { id: s.id, x: p.x, y: p.y, weight: s.departures };
+    });
+    return clusterScreen(pts);
+  }, [stations, zoom, map]);
+
+  // Station focus: only the tapped station.
+  if (selectedStopId) {
+    const s = byId.get(selectedStopId);
+    return s ? (
+      <Marker position={[s.lat, s.lng]} icon={stationIcon(s, true, true)} title={s.name} zIndexOffset={800} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+    ) : null;
+  }
+  const showLabels = zoom >= LABEL_ZOOM;
+  return (
+    <>
+      {clusters.map((c) => {
+        const members = c.members.map((id) => byId.get(id)!).filter(Boolean);
+        if (members.length === 1) {
+          const s = members[0]!;
+          return (
+            <Marker key={s.id} position={[s.lat, s.lng]} icon={stationIcon(s, false, showLabels)} title={s.name} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+          );
+        }
+        const key = c.members.join(",");
+        const centre = map.unproject([c.x, c.y], zoom);
+        if (expanded !== key) {
+          const modes = MODE_ORDER.filter((m) => members.some((s) => s.modes.includes(m)));
+          return (
+            <Marker
+              key={`area-${key}`}
+              position={centre}
+              icon={areaIcon(modes, members.length)}
+              title={`${members.length} stations`}
+              zIndexOffset={100}
+              eventHandlers={{ click: () => setExpanded(key) }}
+            />
+          );
+        }
+        // Spread: each station on a small circle around the area point, with a thin line to its real place.
+        const offsets = spreadOffsets(members.length);
+        return members.map((s, i) => {
+          const pos = map.unproject([c.x + offsets[i]!.dx, c.y + offsets[i]!.dy], zoom);
+          return (
+            <Fragment key={`spread-${s.id}`}>
+              <Polyline positions={[[s.lat, s.lng], pos]} pathOptions={{ color: "var(--radar)", weight: 1, opacity: 0.5 }} interactive={false} />
+              <Marker position={pos} icon={stationIcon(s, false, true)} title={s.name} zIndexOffset={700} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+            </Fragment>
+          );
+        });
+      })}
+    </>
+  );
+}
+
 /** Return to the user's position this long after the last drag/zoom/touch ends. */
 export const AUTO_RECENTER_MS = 1_000;
 /** Duration of the return animation (seconds). */
@@ -178,12 +284,15 @@ function MapController({
   radius,
   recenterSignal,
   autoRecenter,
+  follow,
   onCenter,
 }: {
   userPos: LatLng;
   radius: number;
   recenterSignal: number;
   autoRecenter: boolean;
+  /** Test ride: the map follows userPos (the vehicle) on every update. */
+  follow: boolean;
   onCenter: (c: LatLng) => void;
 }) {
   const map = useMap();
@@ -226,10 +335,13 @@ function MapController({
   useEffect(() => {
     fitAt(exploring.current ? map.getCenter() : latest.current.userPos, false);
   }, [radius, fitAt, map]);
-  // New GPS position: follow it only while not exploring.
+  // New position: follow it only while not exploring — or always during a test ride (the map follows the vehicle).
   useEffect(() => {
-    if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
-  }, [userPos.lat, userPos.lng, map]);
+    if (follow) {
+      exploring.current = false;
+      map.panTo([userPos.lat, userPos.lng], { animate: true, duration: 0.9 });
+    } else if (!exploring.current) map.panTo([userPos.lat, userPos.lng], { animate: true });
+  }, [userPos.lat, userPos.lng, map, follow]);
   // Recenter button: immediately.
   useEffect(() => {
     if (recenterSignal > 0) home(true);
@@ -313,8 +425,10 @@ interface Props {
   userPos: LatLng;
   /** Map centre changes (while panning/zooming). */
   onMapCenter: (c: LatLng) => void;
-  /** Automatic return after 10 s idle is allowed (not while a vehicle or stop is selected). */
+  /** Automatic return after the interaction ends is allowed (not while a vehicle or stop is selected, or riding). */
   autoRecenter: boolean;
+  /** Test ride: the map follows the ridden vehicle and the user dot is hidden (the vehicle is the user). */
+  riding: boolean;
   hasGps: boolean;
   radius: number;
   filter: FilterMode;
@@ -376,6 +490,7 @@ export default function TransitMap({
   userPos,
   onMapCenter,
   autoRecenter,
+  riding,
   hasGps,
   radius,
   filter,
@@ -399,7 +514,6 @@ export default function TransitMap({
     if (recenterRequest > 0) setRecenterSignal((n) => n + 1);
   }, [recenterRequest]);
   const selected = selectedId ? vehicles.find((v) => v.id === selectedId) : undefined;
-  const [zoom, setZoom] = useState(16);
 
   const visibleVehicles = useMemo(() => {
     if (focusStop) return vehicles.filter((v) => v.id === focusStop.vehicleId);
@@ -411,9 +525,6 @@ export default function TransitMap({
     // TPulso: a route can come as several slices (one per map area); `group` is the route they belong to.
     return [...routes.values()].filter((r): r is TransitRoute => ids.has(r.group ?? r.id));
   }, [visibleVehicles, routes]);
-  // TPulso focus mode: with a vehicle selected only its own stops are drawn (routeStops); stations are
-  // hidden. The mode filter is already applied to `stations` (ring segments and which stations show).
-  const visibleStations = selected || focusStop ? [] : stations;
   // Keep the station marker on the radar: clamp to the rim when it lies outside.
   const focusPos = useMemo((): [number, number] | null => {
     if (!focusStop) return null;
@@ -451,20 +562,19 @@ export default function TransitMap({
     >
       {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
       <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} className={MAP_TILES.className} />
-      <MapController userPos={userPos} radius={radius} recenterSignal={recenterSignal} autoRecenter={autoRecenter} onCenter={onMapCenter} />
+      <MapController userPos={userPos} radius={radius} recenterSignal={recenterSignal} autoRecenter={autoRecenter && !riding} follow={riding} onCenter={onMapCenter} />
       <GlideGuard />
       <ClearOnMapClick onClear={clear} />
-      <ZoomWatch onZoom={setZoom} />
 
 
-      <Marker position={[userPos.lat, userPos.lng]} icon={locateIcon} zIndexOffset={1000}>
+      {!riding && <Marker position={[userPos.lat, userPos.lng]} icon={locateIcon} zIndexOffset={1000}>
         <Popup>
           <strong className="font-display">{hasGps ? "You are here" : "TEST location"}</strong>
           <div className="text-muted-foreground">
             {hasGps ? `${userPos.lat.toFixed(5)}, ${userPos.lng.toFixed(5)}` : "Not your real position"}
           </div>
         </Popup>
-      </Marker>
+      </Marker>}
 
       {/* TPulso: the selected vehicle's stops in its mode colour — passed dimmed, next larger with a ring. */}
       {selectedStops.map((u) => (
@@ -485,20 +595,13 @@ export default function TransitMap({
         />
       )}
 
-      {/* TPulso: one ring per physical station; name only when tapped or zoomed in. */}
-      {visibleStations.map((s) => (
-        <Marker
-          key={s.id}
-          position={[s.lat, s.lng]}
-          icon={stationIcon(s, s.id === selectedStopId, s.id === selectedStopId || zoom >= LABEL_ZOOM)}
-          title={s.name}
-          zIndexOffset={s.id === selectedStopId ? 800 : 0}
-          eventHandlers={{ click: () => onSelectStop(s.id) }}
-        />
-      ))}
+      {/* TPulso: stations (level 1) grouped into area points on screen (level 2); station focus shows one. */}
+      {!selected && !focusStop && (
+        <StationLayer stations={stations} selectedStopId={selectedStopId} onSelectStop={onSelectStop} collapseKey={`${selectedId ?? ""}|${selectedStopId ?? ""}`} />
+      )}
 
       {/* TPulso: whole lines (first stop to terminus), never clipped to the radar or to map areas. */}
-      {!selected && baseLines.map((r) => (
+      {!selected && !selectedStopId && baseLines.map((r) => (
         <Polyline
           key={`base-${r.id}`}
           positions={r.path}

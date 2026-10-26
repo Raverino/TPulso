@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TransportMode } from '../../shared/types';
 import nearStops from '../../fixtures/stops.near-test-1500m.json';
-import { groupStations, normaliseName, stationSize, type StationStop } from './stations';
+import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, type StationStop } from './stations';
 
 // Real stops around Marquês de Pombal (fixture from the TML API).
 const bus = new Set<TransportMode>(['bus']);
@@ -46,5 +46,35 @@ describe('stationSize', () => {
     expect(stationSize(0)).toBe(14);
     expect(stationSize(4)).toBeGreaterThan(stationSize(1));
     expect(stationSize(500)).toBe(30);
+  });
+});
+
+describe('clusterScreen (area points)', () => {
+  const pts = [
+    { id: 'a', x: 0, y: 0, weight: 5 },
+    { id: 'b', x: 30, y: 0, weight: 1 },
+    { id: 'c', x: 0, y: 40, weight: 2 },
+    { id: 'd', x: 200, y: 200, weight: 9 },
+    { id: 'e', x: 230, y: 230, weight: 0 },
+  ];
+  it('groups stations closer than 45 px around the busiest one, and keeps far ones apart', () => {
+    const cl = clusterScreen(pts);
+    expect(cl.map(c => c.members)).toEqual([['d', 'e'], ['a', 'b', 'c']]);
+  });
+  it('is deterministic (same result whatever the input order)', () => {
+    expect(clusterScreen([...pts].reverse())).toEqual(clusterScreen(pts));
+  });
+  it('adapts to the zoom: the same stations spread out further apart form separate points', () => {
+    const zoomedIn = pts.map(p => ({ ...p, x: p.x * 3, y: p.y * 3 }));
+    expect(clusterScreen(zoomedIn)).toHaveLength(5);
+  });
+});
+
+describe('spreadOffsets', () => {
+  it('places markers on a circle far enough apart to tap', () => {
+    const o = spreadOffsets(6);
+    expect(o).toHaveLength(6);
+    expect(o[0]).toEqual({ dx: 0, dy: -38 });
+    for (let i = 1; i < o.length; i++) expect(Math.hypot(o[i]!.dx - o[i - 1]!.dx, o[i]!.dy - o[i - 1]!.dy)).toBeGreaterThan(30);
   });
 });

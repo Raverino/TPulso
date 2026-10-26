@@ -1,4 +1,4 @@
-// One marker per physical station: stops with the same normalised name within 60 m are merged.
+// One marker per physical station: stops with the same normalised name within 40 m are merged.
 // The individual stop IDs are kept (for departures and vehicle filtering) and never shown.
 import { distanceMeters } from '../../shared/geo';
 import type { TransportMode } from '../../shared/types';
@@ -22,7 +22,7 @@ export interface Station {
   modes: TransportMode[];
 }
 
-export const MERGE_DISTANCE_M = 60;
+export const MERGE_DISTANCE_M = 40;
 const MODE_ORDER: TransportMode[] = ['bus', 'tram', 'train', 'ferry'];
 const FILLER = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
 
@@ -99,4 +99,55 @@ export function groupStations(stops: readonly StationStop[], maxM = MERGE_DISTAN
 export function stationSize(departures: number, min = 14, max = 30): number {
   if (departures <= 0) return min;
   return Math.round(Math.min(max, min + Math.sqrt(departures) * 3));
+}
+
+// ---- Level 2: area points on screen ---------------------------------------------------------------------
+
+/** Station markers closer than this on screen (at the current zoom) are grouped into one area point. */
+export const AREA_CLUSTER_PX = 45;
+
+export interface ScreenPoint {
+  id: string;
+  /** Pixel position at the current zoom (map.project). */
+  x: number;
+  y: number;
+  /** Departures in the next 10 minutes: busier stations seed the groups. */
+  weight: number;
+}
+
+export interface ScreenCluster {
+  /** Member station ids, sorted (stable key for the group). */
+  members: string[];
+  x: number;
+  y: number;
+}
+
+/**
+ * Deterministic greedy clustering: stations are visited busiest first (ties by id); each unassigned station
+ * starts a group and takes every other unassigned station within `px` of it. Same input, same groups.
+ */
+export function clusterScreen(points: readonly ScreenPoint[], px = AREA_CLUSTER_PX): ScreenCluster[] {
+  const order = [...points].sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id));
+  const used = new Set<string>();
+  const out: ScreenCluster[] = [];
+  for (const seed of order) {
+    if (used.has(seed.id)) continue;
+    const group = order.filter(p => !used.has(p.id) && Math.hypot(p.x - seed.x, p.y - seed.y) <= px);
+    for (const p of group) used.add(p.id);
+    out.push({
+      members: group.map(p => p.id).sort(),
+      x: group.reduce((s, p) => s + p.x, 0) / group.length,
+      y: group.reduce((s, p) => s + p.y, 0) / group.length,
+    });
+  }
+  return out;
+}
+
+/** Pixel offsets that spread `n` markers on a small circle around an area point (first one at the top). */
+export function spreadOffsets(n: number, minRadiusPx = 38, gapPx = 34): { dx: number; dy: number }[] {
+  const r = Math.max(minRadiusPx, (n * gapPx) / (2 * Math.PI));
+  return Array.from({ length: n }, (_, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / n;
+    return { dx: Math.round(r * Math.cos(a)), dy: Math.round(r * Math.sin(a)) };
+  });
 }

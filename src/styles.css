@@ -587,3 +587,10 @@
 .sonar-bezel::before {
   pointer-events: none;
 }
+
+/* TPulso: area point (level-2 group of stations): mode ring + number of stations */
+.area-count {
+  position: absolute;
+  font: 800 12px/1 "Space Grotesk", sans-serif;
+  color: var(--foreground);
+}

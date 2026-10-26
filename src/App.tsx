@@ -61,6 +61,20 @@ const TEST_REASON: Record<TestReason, string> = {
 
 const fmtDate = (d: string) => `${d.slice(6, 8)}/${d.slice(4, 6)}`;
 
+type RideSpeed = 1 | 5 | 10;
+/** TPulso test ride state. The simulated time is baseSim + (real time - baseReal) × speed. */
+interface Ride {
+  key: string;
+  patternId: number;
+  tripIndex: number;
+  serviceDate: string;
+  speed: RideSpeed;
+  baseReal: number;
+  baseSim: number;
+  /** Real time when the trip ended (then the ride exits after 3 s). */
+  endedAt: number | null;
+}
+
 interface AreaStop extends Stop {
   modes: Set<TransportMode>;
 }
@@ -82,8 +96,6 @@ export default function App() {
   }, []);
   useEffect(() => () => clearTimeout(centerTimer.current), []);
   const center = hasCenter && mapCenter ? mapCenter : userCenter;
-  const exploringM = Math.round(distanceMeters(center, userCenter));
-  const exploring = exploringM > 25;
   const [testAccepted, setTestAccepted] = useState(false);
   const [recenterRequest, setRecenterRequest] = useState(0);
   const locate = useCallback(() => {
@@ -98,7 +110,10 @@ export default function App() {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
-  const now = useMemo(() => Date.now(), [tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const realNow = useMemo(() => Date.now(), [tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  // TPulso test ride (TEST mode only): a simulated clock, 1×/5×/10×, used for everything while riding.
+  const [ride, setRide] = useState<Ride | null>(null);
+  const now = ride ? ride.baseSim + (realNow - ride.baseReal) * ride.speed : realNow;
   const nowSec = Math.floor(now / 1000);
   // Departure lists don't need recomputing every second: every 15 s (countdowns still tick each second).
   const boardNow = Math.floor(now / 15_000) * 15_000;
@@ -107,6 +122,43 @@ export default function App() {
   const tt = useTimetable(hasCenter ? center : null, radius);
   const manifest = tt.manifest;
   const expired = !!manifest && isExpired(manifest, now);
+
+  // Test ride: the ridden vehicle's route, its expected position (= the user's position) and the end of the trip.
+  const [rideRoute, setRideRoute] = useState<RouteFile | null>(null);
+  useEffect(() => {
+    if (!ride || !manifest) {
+      setRideRoute(null);
+      return;
+    }
+    let stop = false;
+    loadRoute(manifest, ride.patternId)
+      .then((r) => !stop && setRideRoute(r))
+      .catch(() => !stop && setRide(null));
+    return () => {
+      stop = true;
+    };
+  }, [ride?.patternId, ride?.key, manifest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ridePos = useMemo(() => {
+    if (!ride || !rideRoute || !manifest) return undefined;
+    const pseudo: AreaFile = { format: 1, version: manifest.version, area: "ride", stops: [], patterns: [rideRoute] };
+    return expectedVehicles(manifest, [pseudo], now).find((v) => v.key === ride.key);
+  }, [ride, rideRoute, manifest, now]);
+  // Trip over (no expected position any more): say so, then exit after 3 s.
+  useEffect(() => {
+    if (ride && rideRoute && !ridePos && ride.endedAt === null) setRide({ ...ride, endedAt: realNow });
+  }, [ride, rideRoute, ridePos, realNow]);
+  useEffect(() => {
+    if (!ride?.endedAt) return;
+    const t = setTimeout(() => exitRide(), 3000);
+    return () => clearTimeout(t);
+  }, [ride?.endedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Only in TEST mode: real GPS ends any ride.
+  useEffect(() => {
+    if (ride && gps !== "denied") exitRide();
+  }, [gps]); // eslint-disable-line react-hooks/exhaustive-deps
+  const followPos = ride && ridePos ? { lat: ridePos.lat, lng: ridePos.lng } : userCenter;
+  const exploringM = Math.round(distanceMeters(center, followPos));
+  const exploring = !ride && exploringM > 25;
   useEffect(() => {
     if (manifest) navigator.serviceWorker?.controller?.postMessage({ type: "timetable-version", version: manifest.version });
   }, [manifest]);
@@ -210,6 +262,7 @@ export default function App() {
       lat: st.lat,
       lng: st.lng,
       modes: filter === "all" ? st.modes : st.modes.filter((m) => m === filter),
+      departures: st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0),
       size: stationSize(st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0)),
     }));
   }, [stations, board, boardNow, filter]);
@@ -295,6 +348,17 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [panelView, setPanelView] = useState<"results" | "help" | "stop">("results");
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  const exitRide = useCallback(() => {
+    setRide(null);
+    setRecenterRequest((n) => n + 1); // back to the TEST point
+  }, []);
+  const setRideSpeed = useCallback((speed: RideSpeed) => {
+    setRide((r) => {
+      if (!r) return r;
+      const t = Date.now();
+      return { ...r, speed, baseReal: t, baseSim: r.baseSim + (t - r.baseReal) * r.speed };
+    });
+  }, []);
   const resetPanel = useCallback(() => {
     setPanelView("results");
     setSelectedId(null);
@@ -360,6 +424,15 @@ export default function App() {
   // TPulso: the selected vehicle's full route (route file): route line + scheduled time at each upcoming stop.
   const selectedExp = selectedId ? expectedByKey.get(selectedId) : undefined;
   const selectedPattern = selectedExp?.patternId;
+  const startRide = useCallback(() => {
+    if (!selectedExp || gps !== "denied") return;
+    const t = Date.now();
+    setRide({ key: selectedExp.key, patternId: selectedExp.patternId, tripIndex: selectedExp.tripIndex, serviceDate: selectedExp.serviceDate, speed: 1, baseReal: t, baseSim: t, endedAt: null });
+    setSelectedId(null);
+    setSelectedStopId(null);
+    setOpenId(null);
+    setPanelView("results");
+  }, [selectedExp, gps]);
   const [routeFile, setRouteFile] = useState<{ status: "idle" | "loading" | "ready" | "error"; route?: RouteFile }>({ status: "idle" });
   useEffect(() => {
     if (!manifest || selectedPattern === undefined) {
@@ -510,6 +583,11 @@ export default function App() {
                 TEST
               </span>
             )}
+            {ride && (
+              <span className="rounded bg-foreground px-1 text-[9px] font-black uppercase tracking-wide text-background" role="status">
+                Test ride{ride.speed > 1 ? ` · ${ride.speed}× clock` : ""}
+              </span>
+            )}
             {/* TPulso offline: always say this is not live */}
             <span className="rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
               Timetable data, not live
@@ -624,7 +702,8 @@ export default function App() {
             {hasCenter ? (
               <TransitMap
                 center={center}
-                userPos={userCenter}
+                userPos={followPos}
+                riding={!!ride}
                 onMapCenter={onMapCenter}
                 autoRecenter={!selectedId && panelView !== "stop"}
                 hasGps={gps === "granted"}
@@ -751,6 +830,24 @@ export default function App() {
           stop={stopPanel}
           routeStatus={routeFile.status}
           help={help}
+          onRide={gps === "denied" && !ride ? startRide : undefined}
+          ride={
+            ride
+              ? {
+                  line: rideRoute?.line ?? "",
+                  mode: rideRoute?.mode ?? "bus",
+                  headsign: rideRoute?.headsign ?? "",
+                  speed: ride.speed,
+                  ended: ride.endedAt !== null,
+                  stops:
+                    rideRoute && ridePos
+                      ? upcomingStops(rideRoute, ride.tripIndex, ride.serviceDate, ridePos.nextStopIndex).map((u) => ({ name: u.stop[1], atMs: u.atMs }))
+                      : [],
+                  onSpeed: setRideSpeed,
+                  onExit: exitRide,
+                }
+              : null
+          }
         />
       </div>
     </main>

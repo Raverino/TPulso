@@ -100,6 +100,10 @@ interface Props {
   stop?: StopPanel | null;
   routeStatus: "idle" | "loading" | "ready" | "error";
   help: HelpInfo;
+  /** TEST mode only: start a test ride on the selected vehicle. */
+  onRide?: (() => void) | undefined;
+  /** The running test ride, if any. */
+  ride?: RideInfo | null;
 }
 
 /** TPulso offline: what Help shows about the timetable data. */
@@ -144,6 +148,8 @@ export default function ArrivalsDrawer({
   stop = null,
   routeStatus,
   help,
+  onRide,
+  ride = null,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -186,6 +192,8 @@ export default function ArrivalsDrawer({
               {arrivals.filter((a) => a.distanceM <= radius).length} within {radius} m
             </p>
           </div>
+
+          {ride && <RideCard ride={ride} now={now} />}
 
           {followed && (
             <FollowCard
@@ -384,6 +392,7 @@ export default function ArrivalsDrawer({
               onClose={onClose}
               now={now}
               routeStatus={routeStatus}
+              onRide={onRide}
             />
           ) : null}
         </div>
@@ -496,6 +505,7 @@ function VehicleDetails({
   onClose,
   now,
   routeStatus,
+  onRide,
 }: {
   v: Vehicle;
   r?: TransitRoute | undefined;
@@ -504,6 +514,7 @@ function VehicleDetails({
   onClose: () => void;
   now: number;
   routeStatus: Props["routeStatus"];
+  onRide?: (() => void) | undefined;
 }) {
   const Icon = ICONS[v.mode];
   return (
@@ -561,6 +572,17 @@ function VehicleDetails({
         </div>
       </div>
 
+      {/* TPulso: TEST mode only — ride this vehicle (simulated from the timetable) */}
+      {onRide && (
+        <div className="px-3 pb-3">
+          <button
+            onClick={onRide}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-foreground/60 bg-surface-2 px-3 py-2 font-display text-xs font-bold active:scale-95"
+          >
+            <Icon className="size-4" /> Ride this vehicle <span className="font-medium text-muted-foreground">(test ride)</span>
+          </button>
+        </div>
+      )}
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain pb-3">
         {routeStatus === "loading" && <p className="px-4 py-3 text-center text-xs text-muted-foreground">Loading route…</p>}
         {routeStatus === "error" && <p className="px-4 py-3 text-center text-xs text-destructive">Route unavailable right now.</p>}
@@ -701,6 +723,89 @@ function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: 
             })}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** TPulso: the test ride (TEST mode only), shown like the original's follow card above the departures. */
+export interface RideInfo {
+  line: string;
+  mode: TransportMode;
+  headsign: string;
+  speed: 1 | 5 | 10;
+  ended: boolean;
+  /** Remaining stops with their scheduled times (first = next stop). */
+  stops: { name: string; atMs: number }[];
+  onSpeed: (s: 1 | 5 | 10) => void;
+  onExit: () => void;
+}
+
+function RideCard({ ride, now }: { ride: RideInfo; now: number }) {
+  const Icon = ICONS[ride.mode];
+  const nowSec = Math.floor(now / 1000);
+  const [next, ...rest] = ride.stops;
+  return (
+    <div className="mx-2 mt-2 rounded-xl border-2 border-dashed border-foreground/60 bg-surface-2/80 p-2.5">
+      <div className="flex items-center gap-2">
+        <span className={`grid size-8 shrink-0 place-items-center rounded-lg ${DOT[ride.mode]}`}>
+          <Icon className="size-4 text-primary-foreground" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[9px] font-black uppercase tracking-wide text-foreground">Test ride · simulated from the timetable</div>
+          <div className="truncate font-display text-xs font-bold">
+            {ride.line} <span className="font-medium text-foreground/75">→ {ride.headsign}</span>
+          </div>
+        </div>
+        <button
+          onClick={ride.onExit}
+          className="shrink-0 rounded-lg border border-border bg-surface px-2 py-1 font-display text-[11px] font-bold active:scale-95"
+        >
+          Exit ride
+        </button>
+      </div>
+      {ride.ended ? (
+        <p className="mt-2 text-center font-display text-sm font-bold">Trip ended</p>
+      ) : (
+        <>
+          {next && (
+            <div className="mt-2 flex items-center justify-between rounded-lg bg-background/60 px-2 py-1.5">
+              <div className="min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-wide text-muted-foreground">Next stop</div>
+                <div className="truncate text-xs font-semibold">{next.name}</div>
+              </div>
+              <span className="flex shrink-0 items-center gap-1.5 font-display text-sm font-bold">
+                <SourceDot state="scheduled" />
+                {countdownLabel(Math.round(next.atMs / 1000), nowSec, "scheduled")}
+              </span>
+            </div>
+          )}
+          {rest.length > 0 && (
+            <ol className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto px-1 text-[11px]">
+              {rest.map((s, i) => (
+                <li key={`${i}-${s.name}`} className="flex justify-between gap-2">
+                  <span className="truncate text-foreground/80">{s.name}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{countdownLabel(Math.round(s.atMs / 1000), nowSec, "scheduled")}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
+      )}
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">Ride clock</span>
+        <div className="flex gap-0.5 rounded-lg bg-background/60 p-0.5" role="group" aria-label="Ride speed">
+          {([1, 5, 10] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => ride.onSpeed(s)}
+              aria-pressed={ride.speed === s}
+              className={`rounded-md px-2 py-0.5 font-display text-[11px] font-bold ${ride.speed === s ? "bg-foreground text-background" : "text-muted-foreground"}`}
+            >
+              {s}×
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
