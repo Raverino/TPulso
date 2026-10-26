@@ -1,5 +1,8 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import L from "leaflet";
+// TPulso: map rotation (compass). leafletGlobal must come first: the plugin patches the global L.
+import "@/lib/leafletGlobal";
+import "leaflet-rotate";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -328,6 +331,7 @@ function VehicleAnimator({
   filter,
   radius,
   rideKey,
+  headingUp,
   onSelect,
   operatorName,
 }: {
@@ -336,21 +340,26 @@ function VehicleAnimator({
   filter: VehicleFilter;
   radius: number;
   rideKey: string | null;
+  /** Test ride: turn the map so the ridden vehicle's direction of travel points up. */
+  headingUp: boolean;
   onSelect: (key: string) => void;
   operatorName: (op: string) => string;
 }) {
   const map = useMap();
-  const state = useRef({ trips, clock, filter, radius, rideKey, onSelect, operatorName });
-  state.current = { trips, clock, filter, radius, rideKey, onSelect, operatorName };
+  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName });
+  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName };
 
   useEffect(() => {
     const markers = new Map<string, L.Marker>();
     let raf = 0;
     let lastTs = -Infinity;
+    let prevTs = performance.now();
     const frame = (ts: number) => {
       raf = requestAnimationFrame(frame);
+      const dt = Math.min(100, ts - prevTs);
+      prevTs = ts;
       if (document.hidden) return;
-      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride } = state.current;
+      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride, headingUp: hu } = state.current;
       // Vehicles move a few metres per second: 20 updates a second look the same as 60 and cost a third.
       // A ride's camera follows its vehicle every frame.
       if (!ride && ts - lastTs < 50) return;
@@ -375,8 +384,14 @@ function VehicleAnimator({
       const seen = new Set<string>();
       for (const { v } of shownList) {
         if (v.key === ride) {
-          // Ride camera: same computed position, same frame, no animation. panBy (not setView) keeps Leaflet from
-          // re-projecting every layer each frame.
+          // Heading up: ease the map's rotation towards the direction of travel (time constant 0.35 s, so
+          // the turn at a corner or stop is smooth). Then the camera: same computed position, same frame.
+          if (hu) {
+            const cur = map.getBearing();
+            const d = normDeg(-v.bearing - cur);
+            if (Math.abs(d) > 0.2) map.setBearing(cur + d * (1 - Math.exp(-dt / 350)));
+          }
+          // panBy (not setView) keeps Leaflet from re-projecting every layer each frame.
           const p = map.latLngToContainerPoint([v.lat, v.lng]);
           const c = map.getSize().divideBy(2);
           if (Math.abs(p.x - c.x) + Math.abs(p.y - c.y) > 0.5) map.panBy([p.x - c.x, p.y - c.y], { animate: false });
@@ -459,10 +474,13 @@ function MapController({
 
   const fitAt = useCallback(
     (c: LatLng, glide: boolean) => {
-      // toBounds(size) is a square of `size` metres: the circle's diameter.
-      const b = L.latLng(c.lat, c.lng).toBounds(latest.current.radius * 2);
-      if (glide) map.flyToBounds(b, { padding: [28, 28], duration: RECENTER_ANIM_S });
-      else map.fitBounds(b, { padding: [28, 28], animate: true });
+      // The zoom at which the circle (radius in metres) fits the shorter side with 28 px to spare. Computed from
+      // metres per pixel rather than with fitBounds, which would fit the *rotated* square when the map is turned.
+      const size = map.getSize();
+      const rPx = Math.max(40, Math.min(size.x, size.y) / 2 - 28);
+      const z = Math.log2((156_543.034 * Math.cos((c.lat * Math.PI) / 180) * rPx) / latest.current.radius);
+      if (glide) map.flyTo([c.lat, c.lng], z, { duration: RECENTER_ANIM_S });
+      else map.setView([c.lat, c.lng], z, { animate: true });
     },
     [map],
   );
@@ -591,6 +609,8 @@ interface Props {
   clock: () => number;
   vehicleFilter: VehicleFilter;
   rideKey: string | null;
+  /** Test ride: the ridden vehicle's direction of travel points up (off by default). */
+  headingUp: boolean;
   operatorName: (op: string) => string;
   hasGps: boolean;
   radius: number;
@@ -629,23 +649,42 @@ function ClearOnMapClick({ onClear }: { onClear: () => void }) {
 }
 
 /** TPulso: the radar overlay sits at the screen centre; its radius is `radius` metres at the map centre. */
-function SonarGeometry({ radius, disc, bezel }: { radius: number; disc: RefObject<HTMLDivElement | null>; bezel: RefObject<HTMLDivElement | null> }) {
+function SonarGeometry({
+  radius,
+  disc,
+  root,
+  steer,
+}: {
+  radius: number;
+  disc: RefObject<HTMLDivElement | null>;
+  root: RefObject<HTMLDivElement | null>;
+  steer: RefObject<SVGCircleElement | null>;
+}) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const size = map.getSize();
       const c = map.getCenter();
       const p = map.latLngToContainerPoint(c);
-      const edge = map.latLngToContainerPoint(c.toBounds(radius * 2).getNorthEast());
-      const x = size.x / 2, y = size.y / 2, r = Math.abs(p.y - edge.y);
-      // Written straight to the two overlay elements: no React render on zoom frames.
+      // A point `radius` metres due north: its screen distance is the circle's radius, at any rotation.
+      const north = map.latLngToContainerPoint([c.lat + radius / 111_320, c.lng]);
+      const x = size.x / 2, y = size.y / 2, r = Math.hypot(p.x - north.x, p.y - north.y);
+      // Written straight to the overlay elements (no React render on zoom frames). The bezel and the compass
+      // read --x/--y/--r from the root element.
       const d = disc.current;
       if (d) Object.assign(d.style, { left: `${x - r}px`, top: `${y - r}px`, width: `${r * 2}px`, height: `${r * 2}px` });
-      const b = bezel.current;
-      if (b) {
-        b.style.setProperty("--x", `${x}px`);
-        b.style.setProperty("--y", `${y}px`);
-        b.style.setProperty("--r", `${r}px`);
+      const el = root.current;
+      if (el) {
+        el.style.setProperty("--x", `${x}px`);
+        el.style.setProperty("--y", `${y}px`);
+        el.style.setProperty("--r", `${r}px`);
+      }
+      // The steering band: centred 14 px outside the rim (44 px wide: from 8 px inside the circle to the bezel).
+      const st = steer.current;
+      if (st) {
+        st.setAttribute("cx", String(x));
+        st.setAttribute("cy", String(y));
+        st.setAttribute("r", String(r + 14));
       }
     };
     update();
@@ -654,8 +693,140 @@ function SonarGeometry({ radius, disc, bezel }: { radius: number; disc: RefObjec
     return () => {
       map.off("zoom zoomanim resize viewreset moveend", update);
     };
-  }, [map, radius, disc, bezel]);
+  }, [map, radius, disc, root, steer]);
   return null;
+}
+
+/** Angle difference folded into -180..180 degrees. */
+const normDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
+/** Rotation is ignored until two fingers have turned this far (so a pinch does not wobble the map). */
+const TWIST_DEAD_ZONE_DEG = 12;
+
+/**
+ * TPulso: compass on the radar ring. N/E/S/W turn with the map (N highlighted); markers and labels stay
+ * upright (leaflet-rotate). Rotate by dragging along the ring, or with a two-finger twist on the map; one finger
+ * inside the circle still pans. Tapping N turns the map back to north (0.3 s).
+ */
+function Compass({ map, root, steer }: { map: L.Map | null; root: RefObject<HTMLDivElement | null>; steer: RefObject<SVGCircleElement | null> }) {
+  const anim = useRef(0);
+  // The ring follows the map's rotation (CSS var on the root; the bezel ticks and the letters use it).
+  useEffect(() => {
+    if (!map) return;
+    const set = () => root.current?.style.setProperty("--bearing", `${map.getBearing()}deg`);
+    set();
+    map.on("rotate", set);
+    return () => {
+      map.off("rotate", set);
+    };
+  }, [map, root]);
+  // Steering: drag along the ring.
+  useEffect(() => {
+    const c = steer.current;
+    if (!map || !c) return;
+    let start: { a: number; b: number; id: number } | null = null;
+    const angle = (e: PointerEvent) => {
+      const box = root.current!.getBoundingClientRect();
+      const size = map.getSize();
+      return (Math.atan2(e.clientY - box.top - size.y / 2, e.clientX - box.left - size.x / 2) * 180) / Math.PI;
+    };
+    const down = (e: PointerEvent) => {
+      cancelAnimationFrame(anim.current);
+      start = { a: angle(e), b: map.getBearing(), id: e.pointerId };
+      c.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    };
+    const move = (e: PointerEvent) => {
+      if (start && e.pointerId === start.id) map.setBearing(start.b + normDeg(angle(e) - start.a));
+    };
+    const up = (e: PointerEvent) => {
+      if (start?.id === e.pointerId) start = null;
+    };
+    c.addEventListener("pointerdown", down);
+    c.addEventListener("pointermove", move);
+    c.addEventListener("pointerup", up);
+    c.addEventListener("pointercancel", up);
+    return () => {
+      c.removeEventListener("pointerdown", down);
+      c.removeEventListener("pointermove", move);
+      c.removeEventListener("pointerup", up);
+      c.removeEventListener("pointercancel", up);
+    };
+  }, [map, root, steer]);
+  // Two-finger twist on the map (the pinch zoom keeps working alongside).
+  useEffect(() => {
+    if (!map) return;
+    const el = map.getContainer();
+    let t: { a: number; b: number; on: boolean } | null = null;
+    const ang = (e: TouchEvent) => {
+      const p = e.touches[0]!, q = e.touches[1]!;
+      return (Math.atan2(q.clientY - p.clientY, q.clientX - p.clientX) * 180) / Math.PI;
+    };
+    const startT = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        cancelAnimationFrame(anim.current);
+        t = { a: ang(e), b: map.getBearing(), on: false };
+      } else t = null;
+    };
+    const moveT = (e: TouchEvent) => {
+      if (!t || e.touches.length !== 2) return;
+      let d = normDeg(ang(e) - t.a);
+      if (!t.on) {
+        if (Math.abs(d) < TWIST_DEAD_ZONE_DEG) return;
+        t.on = true;
+        t.a += Math.sign(d) * TWIST_DEAD_ZONE_DEG; // start turning from here, without a jump
+        d = normDeg(ang(e) - t.a);
+      }
+      map.setBearing(t.b + d);
+    };
+    const endT = (e: TouchEvent) => {
+      if (e.touches.length < 2) t = null;
+    };
+    el.addEventListener("touchstart", startT, { passive: true });
+    el.addEventListener("touchmove", moveT, { passive: true });
+    el.addEventListener("touchend", endT, { passive: true });
+    el.addEventListener("touchcancel", endT, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", startT);
+      el.removeEventListener("touchmove", moveT);
+      el.removeEventListener("touchend", endT);
+      el.removeEventListener("touchcancel", endT);
+    };
+  }, [map]);
+  useEffect(() => () => cancelAnimationFrame(anim.current), []);
+
+  const resetNorth = () => {
+    if (!map) return;
+    cancelAnimationFrame(anim.current);
+    const from = normDeg(map.getBearing());
+    if (from === 0) return;
+    if (reducedMotion()) return void map.setBearing(0);
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / 300);
+      map.setBearing(from * (1 - (1 - (1 - k) ** 3))); // ease-out, 0.3 s
+      if (k < 1) anim.current = requestAnimationFrame(step);
+    };
+    anim.current = requestAnimationFrame(step);
+  };
+
+  return (
+    <div className="compass">
+      <svg className="compass-steer" aria-hidden>
+        <circle ref={steer} />
+      </svg>
+      {(["N", "E", "S", "W"] as const).map((l, i) =>
+        l === "N" ? (
+          <button key={l} type="button" className="compass-letter is-north" style={{ "--a": "0deg" } as React.CSSProperties} onClick={resetNorth} aria-label="Turn the map to north up" title="North up">
+            N
+          </button>
+        ) : (
+          <span key={l} className="compass-letter" style={{ "--a": `${i * 90}deg` } as React.CSSProperties} aria-hidden>
+            {l}
+          </span>
+        ),
+      )}
+    </div>
+  );
 }
 
 /**
@@ -681,6 +852,7 @@ export default memo(function TransitMap({
   clock,
   vehicleFilter,
   rideKey,
+  headingUp,
   operatorName,
   hasGps,
   radius,
@@ -698,7 +870,9 @@ export default memo(function TransitMap({
   baseLines,
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
-  const bezelRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const steerRef = useRef<SVGCircleElement>(null);
+  const [leafletMap, setLeafletMap] = useState<L.Map | null>(null);
   // One canvas for all route lines (cheaper than hundreds of SVG paths; smoothFactor stays 0).
   const lineRenderer = useMemo(() => L.canvas({ padding: 0.3 }), []);
   // Recenter shows while the radar centre (map centre) is away from the user.
@@ -735,8 +909,15 @@ export default memo(function TransitMap({
   const clear = useCallback(() => onSelect(null), [onSelect]);
 
   return (
-    <div className="relative h-full w-full">
+    <div ref={rootRef} className="relative h-full w-full">
     <MapContainer
+      ref={setLeafletMap}
+      // TPulso: rotation (leaflet-rotate); our own twist handler and compass replace its touch rotate and control.
+      rotate
+      bearing={0}
+      touchRotate={false}
+      rotateControl={false}
+      shiftKeyRotate
       zoomSnap={0}
       center={[center.lat, center.lng]}
       zoom={16}
@@ -833,14 +1014,16 @@ export default memo(function TransitMap({
         filter={vehicleFilter}
         radius={radius}
         rideKey={rideKey}
+        headingUp={headingUp}
         onSelect={onSelect}
         operatorName={operatorName}
       />
-      <SonarGeometry radius={radius} disc={discRef} bezel={bezelRef} />
+      <SonarGeometry radius={radius} disc={discRef} root={rootRef} steer={steerRef} />
     </MapContainer>
       {/* TPulso: the radar disc and bezel are a screen overlay; they never capture drags or taps. */}
       <div ref={discRef} className="radar-disc" aria-hidden />
-      <div ref={bezelRef} className="sonar-bezel" aria-hidden />
+      <div className="sonar-bezel" aria-hidden />
+      <Compass map={leafletMap} root={rootRef} steer={steerRef} />
       {/* TPulso additions: missing tile key notice and the Recenter button while exploring. */}
       {MAP_TILES.problem && (
         <p className="pointer-events-none absolute left-1/2 top-2 z-[480] -translate-x-1/2 rounded-lg bg-surface/90 px-2 py-1 text-center text-[10px] text-muted-foreground">

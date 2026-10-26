@@ -841,6 +841,9 @@ export interface RideInfo {
   /** Remaining stops with their scheduled times (first = next stop). */
   stops: { name: string; atMs: number }[];
   onSpeed: (s: 1 | 5 | 10) => void;
+  /** The map turns so the direction of travel points up (off by default). */
+  headingUp: boolean;
+  onHeadingUp: (on: boolean) => void;
   onExit: () => void;
 }
 
@@ -908,6 +911,17 @@ function RideCard({ ride }: { ride: RideInfo }) {
             </button>
           ))}
         </div>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">Map direction</span>
+        <button
+          type="button"
+          onClick={() => ride.onHeadingUp(!ride.headingUp)}
+          aria-pressed={ride.headingUp}
+          className={`rounded-md px-2 py-0.5 font-display text-[11px] font-bold ${ride.headingUp ? "bg-foreground text-background" : "bg-background/60 text-muted-foreground"}`}
+        >
+          Heading up
+        </button>
       </div>
     </div>
   );

@@ -121,6 +121,11 @@ export default function App() {
   const [filter, setFilter] = useState<FilterMode>("all");
   // TPulso test ride (TEST mode only): a simulated clock, 1×/5×/10×, used for everything while riding.
   const [ride, setRide] = useState<Ride | null>(null);
+  // TPulso: during a ride, optionally turn the map so the direction of travel points up (off by default).
+  const [headingUp, setHeadingUp] = useState(false);
+  useEffect(() => {
+    if (!ride) setHeadingUp(false);
+  }, [ride]);
   useLayoutEffect(() => {
     setSimClock(ride ? { baseSim: ride.baseSim, baseReal: ride.baseReal, speed: ride.speed } : null);
   }, [ride?.baseSim, ride?.baseReal, ride?.speed, !ride]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -823,6 +828,7 @@ export default function App() {
                 clock={clockNow}
                 vehicleFilter={vehicleFilter}
                 rideKey={ride?.key ?? null}
+                headingUp={!!ride && headingUp}
                 operatorName={operatorName}
                 onMapCenter={onMapCenter}
                 autoRecenter={!selectedId && panelView !== "stop"}
@@ -961,6 +967,8 @@ export default function App() {
                       ? upcomingStops(rideRoute, ride.tripIndex, ride.serviceDate, ridePos.nextStopIndex).map((u) => ({ name: u.stop[1], atMs: u.atMs }))
                       : [],
                   onSpeed: setRideSpeed,
+                  headingUp,
+                  onHeadingUp: setHeadingUp,
                   onExit: exitRide,
                 }
               : null
