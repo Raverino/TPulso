@@ -6,6 +6,7 @@ import {
   Download,
   Footprints,
   Gauge,
+  ListOrdered,
   MapPin,
   Pin,
   PinOff,
@@ -104,6 +105,21 @@ interface Props {
   onRide?: (() => void) | undefined;
   /** The running test ride, if any. */
   ride?: RideInfo | null;
+  /** Expanded departure rows (by row id) and their trip stops. Toggling never touches the map. */
+  tripStops?: Record<string, TripStopsView>;
+  onToggleTrip?: (rowId: string) => void;
+}
+
+/** TPulso: a departure row's trip, expanded: its upcoming stops (same data as the vehicle panel). */
+export interface TripStopsView {
+  status: "loading" | "ready" | "error";
+  stops: UpcomingStop[];
+  /** The stop the vehicle is at or heading to (highlighted). */
+  nextKey: string | null;
+  /** The row's own stop ("your stop"). */
+  yourKey: string | null;
+  /** Final destination: headsign and terminus stop. */
+  destination: string;
 }
 
 /** TPulso offline: what Help shows about the timetable data. */
@@ -150,6 +166,8 @@ export default function ArrivalsDrawer({
   help,
   onRide,
   ride = null,
+  tripStops = {},
+  onToggleTrip,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -343,6 +361,8 @@ export default function ArrivalsDrawer({
                                   <Pin className="size-3" />
                                 </button>
                               )}
+                              {onToggleTrip && <TripToggle open={!!tripStops[a.id]} onClick={() => onToggleTrip(a.id)} />}
+                              {tripStops[a.id] && <TripStopsPanel view={tripStops[a.id]!} now={now} />}
                               {openId === a.id && (
                                 <div className="basis-full rounded-lg bg-background/60 px-2 py-1.5 text-[11px]">
                                   <div>
@@ -382,7 +402,7 @@ export default function ArrivalsDrawer({
           {panelView === "help" ? (
             <HelpPanel onClose={onPanelClose} info={help} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
-            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} />
+            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} />
           ) : back ? (
             <VehicleDetails
               v={back.v}
@@ -629,38 +649,113 @@ function StopSection({
       {stops.length === 0 ? (
         <p className="px-4 py-3 text-center text-xs text-muted-foreground">{empty}</p>
       ) : (
-        <ol className="relative ml-5 mr-3 border-l border-dashed border-border">
-          {stops.map((u) => (
-            <li key={u.key} className="relative flex items-center gap-2 py-1.5 pl-4">
-              <span
-                className={`absolute -left-[5px] size-2.5 rounded-full ${accent ? "bg-primary" : "border border-muted-foreground bg-surface"}`}
-              />
-              <div className="min-w-0 flex-1">
-                <div
-                  className={`truncate text-xs font-semibold ${accent ? "" : "text-foreground/70"}`}
-                >
-                  {u.name}
-                </div>
-                <div className="text-[10px] text-muted-foreground">{u.aheadM} m ahead</div>
-              </div>
-              {/* TPulso: one source state per stop time (Live / Scheduled / Estimated) */}
-              <span
-                className={`flex items-center gap-1.5 font-display text-sm font-bold ${accent ? "text-primary" : "text-muted-foreground"}`}
-                aria-label={`${SOURCE_TEXT[u.state]} ${countdownLabel(nowSec + u.etaS, nowSec, u.state)}`}
-              >
-                <SourceDot state={u.state} />
-                {countdownLabel(nowSec + u.etaS, nowSec, u.state)}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <TripStopList stops={stops} accent={accent} nowSec={nowSec} showAhead />
       )}
     </section>
   );
 }
 
+/** The stop list of the vehicle panel, shared with expanded departure rows. */
+function TripStopList({
+  stops,
+  accent = false,
+  nowSec,
+  showAhead = false,
+  highlightKey = null,
+  yourKey = null,
+}: {
+  stops: UpcomingStop[];
+  accent?: boolean;
+  nowSec: number;
+  showAhead?: boolean;
+  highlightKey?: string | null;
+  yourKey?: string | null;
+}) {
+  return (
+    <ol className="relative ml-5 mr-3 border-l border-dashed border-border">
+      {stops.map((u) => {
+        const hi = u.key === highlightKey;
+        const strong = accent || hi;
+        return (
+          <li key={u.key} className={`relative flex items-center gap-2 py-1.5 pl-4 ${hi ? "rounded-r-lg bg-foreground/10" : ""}`}>
+            <span
+              className={`absolute -left-[5px] rounded-full ${hi ? "size-3 -left-[6px] bg-foreground ring-2 ring-foreground/40" : strong ? "size-2.5 bg-primary" : "size-2.5 border border-muted-foreground bg-surface"}`}
+            />
+            <div className="min-w-0 flex-1">
+              <div className={`truncate text-xs font-semibold ${strong ? "" : "text-foreground/70"}`}>
+                {u.name}
+                {u.key === yourKey && <span className="ml-1.5 rounded bg-foreground/15 px-1 text-[9px] font-bold uppercase">your stop</span>}
+              </div>
+              {showAhead && <div className="text-[10px] text-muted-foreground">{u.aheadM} m ahead</div>}
+              {hi && !showAhead && <div className="text-[10px] text-muted-foreground">next stop</div>}
+            </div>
+            {/* TPulso: one source state per stop time */}
+            <span
+              className={`flex items-center gap-1.5 font-display text-sm font-bold ${strong ? "text-primary" : "text-muted-foreground"}`}
+              aria-label={`${SOURCE_TEXT[u.state]} ${countdownLabel(nowSec + u.etaS, nowSec, u.state)}`}
+            >
+              <SourceDot state={u.state} />
+              {countdownLabel(nowSec + u.etaS, nowSec, u.state)}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** "Show later stops" button on a departure row. Never selects or hides anything on the map. */
+function TripToggle({ open, onClick }: { open: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label={open ? "Hide later stops" : "Show later stops"}
+      aria-expanded={open}
+      title={open ? "Hide later stops" : "Show later stops"}
+      className={`grid size-6 shrink-0 place-items-center rounded-md hover:text-foreground ${open ? "bg-foreground/15 text-foreground" : "text-muted-foreground"}`}
+    >
+      <ListOrdered className="size-3" />
+    </button>
+  );
+}
+
+/** A departure row's trip, expanded: upcoming stops with scheduled times and the final destination. */
+function TripStopsPanel({ view, now }: { view: TripStopsView; now: number }) {
+  return (
+    <div className="basis-full rounded-lg bg-background/60 py-1.5" onClick={(e) => e.stopPropagation()}>
+      {view.status === "loading" ? (
+        <p className="px-3 py-1 text-[11px] text-muted-foreground">Loading stops…</p>
+      ) : view.status === "error" ? (
+        <p className="px-3 py-1 text-[11px] text-destructive">Stops unavailable.</p>
+      ) : (
+        <>
+          <TripStopList stops={view.stops} nowSec={Math.floor(now / 1000)} highlightKey={view.nextKey} yourKey={view.yourKey} />
+          <p className="px-3 pt-1 text-[11px] text-muted-foreground">
+            Final destination: <span className="font-semibold text-foreground">{view.destination}</span>
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** TPulso: tapping a stop shows its departures for the next 10 minutes. */
-function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: (() => void) | undefined }) {
+function StopDetails({
+  s,
+  now,
+  onClose,
+  tripStops,
+  onToggleTrip,
+}: {
+  s: StopPanel;
+  now: number;
+  onClose: (() => void) | undefined;
+  tripStops: Record<string, TripStopsView>;
+  onToggleTrip?: ((rowId: string) => void) | undefined;
+}) {
   const nowSec = Math.floor(now / 1000);
   const ageSec = s.fetchedAt ? (now - s.fetchedAt) / 1000 : 0;
   return (
@@ -697,7 +792,7 @@ function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: 
               const Icon = ICONS[d.mode];
               const state = depState(d.realtime, ageSec);
               return (
-                <li key={d.id} className={`flex items-center gap-2.5 rounded-xl bg-surface-2/60 px-2.5 py-1.5 ${state === "stale" ? "opacity-60" : ""}`}>
+                <li key={d.id} className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-xl bg-surface-2/60 px-2.5 py-1.5 ${state === "stale" ? "opacity-60" : ""}`}>
                   <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${DOT[d.mode]}`}>
                     <Icon className="size-3.5 text-primary-foreground" />
                   </span>
@@ -714,6 +809,8 @@ function StopDetails({ s, now, onClose }: { s: StopPanel; now: number; onClose: 
                       {state === "stale" ? `last seen ${agoLabel(ageSec)} ago` : state === "scheduled" ? "scheduled" : <DelayText delayMin={Math.round(d.delaySec / 60)} />}
                     </div>
                   </div>
+                  {onToggleTrip && <TripToggle open={!!tripStops[d.id]} onClick={() => onToggleTrip(d.id)} />}
+                  {tripStops[d.id] && <TripStopsPanel view={tripStops[d.id]!} now={now} />}
                 </li>
               );
             })}

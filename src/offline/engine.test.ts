@@ -5,7 +5,7 @@ import { serviceDayStartMs, type AreaFile, type Manifest, type RouteFile } from 
 import { convert } from '../../scripts/timetable/convert';
 import { folderSource } from '../../scripts/timetable/gtfs';
 import { OPERATORS } from '../../scripts/timetable/operators';
-import { departuresAtStop, expectedVehicles, isExpired, pointAlong, routePath, upcomingStops } from './engine';
+import { departuresAtStop, expectedVehicles, isExpired, pointAlong, routePath, tripStopsForRow, upcomingStops } from './engine';
 
 const TODAY = '20261025';
 const manifest: Pick<Manifest, 'window'> = { window: { first: TODAY, days: 14 } };
@@ -116,5 +116,27 @@ describe('upcomingStops and expiry', () => {
     const p = (areas as AreaFile[]).flatMap(a => a.patterns).find(x => x.line === '3715')!;
     const a = pointAlong(p, 0), b = pointAlong(p, p.dist.at(-1)!);
     expect(Number.isFinite(a.lat) && Number.isFinite(b.lat)).toBe(true);
+  });
+});
+
+describe('tripStopsForRow', () => {
+  it('lists the trip from the vehicle\'s next stop, marks the row\'s stop and gives the terminus', async () => {
+    const { areas, route3715 } = await setup();
+    const now = at(8, 50);
+    const v = expectedVehicles(manifest, areas, now).find(x => x.line === '3715')!;
+    const rowStop = route3715.stops[v.nextStopIndex + 2]!;
+    const dep = departuresAtStop(manifest, areas, rowStop, now, now + 3600_000).find(d => d.tripKey === v.key)!;
+    const t = tripStopsForRow(route3715, v.tripIndex, v.serviceDate, rowStop, dep.atMs, v.nextStopIndex)!;
+    expect(t.nextIndex).toBe(v.nextStopIndex);
+    expect(t.stops[0]!.index).toBe(v.nextStopIndex);
+    expect(t.yourIndex).toBe(v.nextStopIndex + 2);
+    expect(t.terminus).toBe(route3715.stopInfo.at(-1)![1]);
+  });
+  it('starts at the first stop when the trip has not started yet', async () => {
+    const { route3715 } = await setup();
+    const t = tripStopsForRow(route3715, 0, TODAY, route3715.stops[3]!, 0, undefined)!;
+    expect(t.nextIndex).toBe(0);
+    expect(t.stops).toHaveLength(route3715.stops.length);
+    expect(t.yourIndex).toBe(3);
   });
 });

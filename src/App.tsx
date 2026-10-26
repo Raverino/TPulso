@@ -5,7 +5,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
 
-import ArrivalsDrawer, { type HelpInfo, type StopPanel } from "@/components/transit/ArrivalsDrawer";
+import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
 import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
 import { groupStations, stationSize } from "@/offline/stations";
 import {
@@ -31,7 +31,7 @@ import { addDays, decodePolyline, type AreaFile, type LineShape, type RouteFile 
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
-import { departuresAtStop, expectedVehicles, isExpired, routePath, upcomingStops, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
+import { departuresAtStop, expectedVehicles, isExpired, routePath, tripStopsForRow, upcomingStops, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
 import { MODE_COLORS, MODE_TEXT } from "@/config";
@@ -548,6 +548,65 @@ export default function App() {
 
 
 
+  // TPulso: "Show later stops" on a departure row — the trip's upcoming stops (row id = "<trip key>@<stop id>").
+  // Only the panel changes; nothing on the map is selected or hidden.
+  const [expandedTrips, setExpandedTrips] = useState<string[]>([]);
+  const toggleTrip = useCallback((rowId: string) => {
+    setExpandedTrips((cur) => (cur.includes(rowId) ? cur.filter((x) => x !== rowId) : [...cur, rowId]));
+  }, []);
+  const [tripRoutes, setTripRoutes] = useState<Map<number, RouteFile | "error">>(new Map());
+  useEffect(() => {
+    if (!manifest) return;
+    for (const rowId of expandedTrips) {
+      const p = Number(rowId.split(":")[0]);
+      if (tripRoutes.has(p)) continue;
+      loadRoute(manifest, p)
+        .then((r) => setTripRoutes((m) => new Map(m).set(p, r)))
+        .catch(() => setTripRoutes((m) => new Map(m).set(p, "error")));
+    }
+  }, [expandedTrips, manifest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tripStops = useMemo(() => {
+    const out: Record<string, TripStopsView> = {};
+    const allDeps = [...(board ?? []), ...(stopPanel?.departures ?? [])];
+    for (const rowId of expandedTrips) {
+      const [tripKey, stopId] = rowId.split("@") as [string, string];
+      const [p, ti, date] = tripKey.split(":");
+      const r = tripRoutes.get(Number(p));
+      const dep = allDeps.find((d) => d.id === rowId);
+      if (!r) {
+        out[rowId] = { status: "loading", stops: [], nextKey: null, yourKey: null, destination: dep?.destination ?? "" };
+        continue;
+      }
+      if (r === "error" || !dep) {
+        out[rowId] = { status: "error", stops: [], nextKey: null, yourKey: null, destination: dep?.destination ?? "" };
+        continue;
+      }
+      const v = expectedByKey.get(tripKey);
+      const t = tripStopsForRow(r, Number(ti), date!, stopId, dep.expectedAt, v?.nextStopIndex);
+      if (!t) {
+        out[rowId] = { status: "error", stops: [], nextKey: null, yourKey: null, destination: dep.destination };
+        continue;
+      }
+      out[rowId] = {
+        status: "ready",
+        stops: t.stops.map((u) => ({
+          key: `${rowId}-${u.index}`,
+          stopId: u.stop[0],
+          name: u.stop[1],
+          lat: u.stop[2],
+          lng: u.stop[3],
+          aheadM: 0,
+          etaS: (u.atMs - now) / 1000,
+          state: "scheduled" as const,
+        })),
+        nextKey: `${rowId}-${t.nextIndex}`,
+        yourKey: t.yourIndex >= 0 ? `${rowId}-${t.yourIndex}` : null,
+        destination: t.terminus && t.terminus !== dep.destination ? `${dep.destination} (${t.terminus})` : dep.destination,
+      };
+    }
+    return out;
+  }, [expandedTrips, tripRoutes, board, stopPanel, expectedByKey, now]);
+
   // TPulso: Help shows the timetable's dates per operator and offers to save the whole region.
   const [dl, setDl] = useState<HelpInfo["download"]>({ state: "idle", done: 0, total: 0 });
   const help: HelpInfo = {
@@ -830,6 +889,8 @@ export default function App() {
           stop={stopPanel}
           routeStatus={routeFile.status}
           help={help}
+          tripStops={tripStops}
+          onToggleTrip={toggleTrip}
           onRide={gps === "denied" && !ride ? startRide : undefined}
           ride={
             ride

@@ -229,3 +229,49 @@ export function upcomingStops(route: RouteFile, tripIndex: number, serviceDate: 
 export function routePath(route: RouteFile): [number, number][] {
   return decodePolyline(route.shape);
 }
+
+export interface TripStops {
+  stops: ScheduledStop[];
+  /** Full-pattern index of the stop the vehicle is at or heading to. */
+  nextIndex: number;
+  /** Full-pattern index of the row's own stop. */
+  yourIndex: number;
+  /** Terminus stop name. */
+  terminus: string;
+}
+
+/**
+ * The trip behind a departure row: its upcoming stops from the vehicle's next stop (or the first stop when
+ * the trip has not started), the row's own stop (matched by its scheduled time, for routes that pass a stop
+ * twice) and the terminus. Same data as the vehicle panel.
+ */
+export function tripStopsForRow(
+  route: RouteFile,
+  tripIndex: number,
+  serviceDate: string,
+  rowStopId: string,
+  rowAtMs: number,
+  vehicleNextIndex: number | undefined,
+): TripStops | null {
+  const trip = route.trips[tripIndex];
+  if (!trip) return null;
+  const [start, pi] = trip;
+  const pr = route.profiles[pi]!;
+  const s = dayStart(serviceDate);
+  let yourIndex = -1;
+  for (let i = 0; i < route.stops.length; i++) {
+    if (route.stops[i] !== rowStopId) continue;
+    if (yourIndex < 0) yourIndex = i;
+    if (s + (start + pr[i * 2 + 1]!) * 1000 === rowAtMs) {
+      yourIndex = i;
+      break;
+    }
+  }
+  const nextIndex = vehicleNextIndex ?? 0;
+  return {
+    stops: upcomingStops(route, tripIndex, serviceDate, nextIndex),
+    nextIndex,
+    yourIndex,
+    terminus: route.stopInfo[route.stopInfo.length - 1]?.[1] ?? '',
+  };
+}
