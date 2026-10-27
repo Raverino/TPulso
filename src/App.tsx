@@ -464,6 +464,18 @@ export default function App() {
       error: null,
     };
   }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive]);
+  // The picked platform's next departures, shown in its expanded row of the station list.
+  const pickedDepartures: LiveDeparture[] | null = useMemo(() => {
+    if (!pickedId || !manifest) return null;
+    const st = allStations.find((x) => x.id === pickedId);
+    if (!st || expired) return [];
+    const ids = new Set(st.stopIds);
+    return allStops
+      .filter((s) => ids.has(s.id))
+      .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
+      .sort((a, b) => a.expectedAt - b.expectedAt)
+      .slice(0, 4);
+  }, [pickedId, allStations, allStops, manifest, expired, tt.areas, now, toLive]);
   const areaRows = useMemo(() => {
     if (!areaIds) return null;
     const byId = new Map(allStations.map((st) => [st.id, st]));
@@ -1014,6 +1026,7 @@ export default function App() {
           area={areaRows}
           pickedId={pickedId}
           onPickRow={tapPlatform}
+          pickedDepartures={pickedDepartures}
           now={now}
           boardAgeSec={0}
           boardStatus={{

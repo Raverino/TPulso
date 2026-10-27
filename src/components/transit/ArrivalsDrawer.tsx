@@ -116,6 +116,8 @@ interface Props {
   area?: AreaRow[] | null;
   pickedId?: string | null;
   onPickRow?: (id: string) => void;
+  /** The picked platform's next departures (shown in its expanded row). */
+  pickedDepartures?: LiveDeparture[] | null;
   onPanelClose?: () => void;
   // TPulso additions
   now: number;
@@ -206,6 +208,7 @@ export default function ArrivalsDrawer({
   area = null,
   pickedId = null,
   onPickRow,
+  pickedDepartures = null,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -435,8 +438,11 @@ export default function ArrivalsDrawer({
           className={`panel-layer absolute inset-0 flex flex-col bg-surface ${flipped ? "" : "is-away pointer-events-none"}`}
           aria-hidden={!flipped}
         >
+          {/* TPulso: keyed by view, so switching list ↔ platform cross-fades (150 ms) inside the open panel;
+              a selection change in the list re-renders in place. */}
+          <div key={panelView} className="panel-swap flex min-h-0 flex-1 flex-col">
           {panelView === "area" && area ? (
-            <AreaList rows={area} pickedId={pickedId ?? null} onPick={onPickRow} onClose={onPanelClose} />
+            <AreaList rows={area} pickedId={pickedId ?? null} departures={pickedDepartures} onPick={onPickRow} onClose={onPanelClose} />
           ) : panelView === "help" ? (
             <HelpPanel onClose={onPanelClose} info={help} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
@@ -453,6 +459,7 @@ export default function ArrivalsDrawer({
               onRide={onRide}
             />
           ) : null}
+          </div>
         </div>
       </div>
     </aside>
@@ -461,55 +468,102 @@ export default function ArrivalsDrawer({
 
 /**
  * TPulso: the stations of an expanded area point. Each row: the letter shown on the map, the full name (wraps,
- * never cut), the direction (platforms), the distance. A first tap picks the station (its letter on the map is
- * highlighted too); a second tap, or "Departures", opens it.
+ * never cut), the direction (platforms), the kind of stop and the distance. A first tap picks the station: its
+ * row expands in place with the next departures (its letter on the map is highlighted too); a second tap, or
+ * "All departures", opens its panel. The list itself never moves or reloads.
  */
-function AreaList({ rows, pickedId, onPick, onClose }: { rows: AreaRow[]; pickedId: string | null; onPick?: ((id: string) => void) | undefined; onClose: (() => void) | undefined }) {
-  const picked = useRef<HTMLLIElement | null>(null);
-  useEffect(() => {
-    picked.current?.scrollIntoView({ block: "nearest" });
-  }, [pickedId]);
+function AreaList({
+  rows,
+  pickedId,
+  departures,
+  onPick,
+  onClose,
+}: {
+  rows: AreaRow[];
+  pickedId: string | null;
+  departures: LiveDeparture[] | null;
+  onPick?: ((id: string) => void) | undefined;
+  onClose: (() => void) | undefined;
+}) {
   return (
     <div className="flex h-full flex-col">
       <PanelHeader title={`Stations here · ${rows.length}`} icon={MapPin} onClose={onClose} />
       <ul className="min-h-0 flex-1 touch-pan-y space-y-1 overflow-y-auto overscroll-contain p-2">
-        {rows.map((r) => {
-          const on = r.id === pickedId;
-          const Icon = ICONS[r.modes[0] ?? "bus"];
-          return (
-            <li key={r.id} ref={on ? picked : undefined}>
-              <div
-                role="button"
-                tabIndex={0}
-                aria-pressed={on}
-                onClick={() => onPick?.(r.id)}
-                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onPick?.(r.id)}
-                className={`flex cursor-pointer items-start gap-2.5 rounded-xl px-2.5 py-2 transition-colors ${on ? "bg-surface-2 ring-1 ring-primary" : "hover:bg-surface-2"}`}
-              >
-                <span className={`grid size-6 shrink-0 place-items-center rounded-full font-display text-[11px] font-black ${on ? "bg-primary text-primary-foreground" : "bg-[var(--radar)] text-background"}`}>
-                  {r.letter}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start gap-1.5 font-display text-sm font-bold leading-snug [overflow-wrap:anywhere]">
-                    <Icon className="mt-0.5 size-3.5 shrink-0" style={{ color: MODE_COLORS[r.modes[0] ?? "bus"] }} />
-                    <span>{r.name}</span>
-                  </div>
-                  {r.towards && <div className="text-xs text-foreground/80 [overflow-wrap:anywhere]">towards {r.towards}</div>}
-                  <div className="text-[11px] text-muted-foreground">
-                    {r.kindLabel} · {r.distanceM} m away
-                  </div>
-                  {on && (
-                    <span className="mt-1 inline-block text-xs font-bold text-primary">Tap again for departures →</span>
-                  )}
-                </div>
-              </div>
-            </li>
-          );
-        })}
+        {rows.map((r) => (
+          <AreaListRow key={r.id} r={r} on={r.id === pickedId} departures={r.id === pickedId ? departures : null} onPick={onPick} />
+        ))}
       </ul>
     </div>
   );
 }
+
+const AreaListRow = memo(function AreaListRow({
+  r,
+  on,
+  departures,
+  onPick,
+}: {
+  r: AreaRow;
+  on: boolean;
+  departures: LiveDeparture[] | null;
+  onPick?: ((id: string) => void) | undefined;
+}) {
+  const li = useRef<HTMLLIElement | null>(null);
+  // Keep the last departures while the row collapses, so its content eases out instead of vanishing.
+  const shown = useRef<LiveDeparture[] | null>(null);
+  if (on && departures) shown.current = departures;
+  useEffect(() => {
+    if (on) li.current?.scrollIntoView({ block: "nearest" });
+  }, [on]);
+  const Icon = ICONS[r.modes[0] ?? "bus"];
+  const deps = shown.current;
+  return (
+    <li ref={li}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={on}
+        aria-expanded={on}
+        onClick={() => onPick?.(r.id)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onPick?.(r.id)}
+        className={`area-row cursor-pointer rounded-xl px-2.5 py-2 ${on ? "is-on" : ""}`}
+      >
+        <div className="flex items-start gap-2.5">
+          <span className="area-row-letter grid size-6 shrink-0 place-items-center rounded-full font-display text-[11px] font-black">{r.letter}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-1.5 font-display text-sm font-bold leading-snug [overflow-wrap:anywhere]">
+              <Icon className="mt-0.5 size-3.5 shrink-0" style={{ color: MODE_COLORS[r.modes[0] ?? "bus"] }} />
+              <span>{r.name}</span>
+            </div>
+            {r.towards && <div className="text-xs text-foreground/80 [overflow-wrap:anywhere]">towards {r.towards}</div>}
+            <div className="text-[11px] text-muted-foreground">
+              {r.kindLabel} · {r.distanceM} m away
+            </div>
+          </div>
+        </div>
+        <div className={`area-row-more ${on ? "is-open" : ""}`} aria-hidden={!on}>
+          <div>
+            <div className="mt-2 space-y-1 border-t border-border pt-2 pl-8">
+              {deps && deps.length === 0 && <p className="text-xs text-muted-foreground">No departures in the next 10 minutes.</p>}
+              {deps?.map((d) => (
+                <div key={d.id} className="flex items-center gap-2 text-xs">
+                  <span className="min-w-8 rounded px-1 text-center font-display font-bold" style={{ background: MODE_COLORS[d.mode], color: "oklch(0.16 0.025 258)" }}>
+                    {d.line}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{d.destination}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    <Countdown atSec={Math.round(d.expectedAt / 1000)} state="scheduled" />
+                  </span>
+                </div>
+              ))}
+              <span className="inline-block pt-0.5 text-xs font-bold text-primary">All departures · tap again →</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+});
 
 function PanelHeader({ title, icon: Icon, onClose }: { title: string; icon: typeof CircleHelp; onClose: (() => void) | undefined }) {
   return (

@@ -521,9 +521,10 @@
   border-radius: 9999px;
   background: oklch(0.16 0.025 258 / 0.85);
 }
-/* Selected (tapped, or picked in an expanded area point): the ring keeps its mode colour and the core stays
-   dark (no vehicle shows through); a light halo around it marks the selection. */
-.station.is-selected::before {
+/* Selected (tapped, or picked in an expanded area point): the ring keeps its mode colour and a light halo
+   marks it. The halo is always there and only fades in, and a picked station grows slightly: transform and
+   opacity only (200 ms, ease-out), so a selection change never re-creates or flashes anything. */
+.station::before {
   content: "";
   position: absolute;
   width: calc(var(--size) + 9px);
@@ -532,9 +533,29 @@
   border: 2px solid var(--radar);
   box-shadow: 0 0 0 1px oklch(0 0 0 / 0.5), 0 0 10px color-mix(in oklch, var(--radar) 45%, transparent);
   pointer-events: none;
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
 }
+.station.is-selected::before {
+  opacity: 1;
+  transform: scale(1);
+}
+.spread-anim .station {
+  transition: transform 200ms ease-out;
+}
+.spread-anim .station.is-selected {
+  transform: scale(1.12);
+}
+/* Spread stations sit over faded vehicles: an opaque core, so nothing shows through. */
+.spread-anim .station-core,
 .station.is-selected .station-core {
   background: oklch(0.16 0.025 258);
+}
+.area-point::before {
+  display: none;
 }
 /* TPulso: one short name (≤ 22 characters) shows only for the tapped marker and on hover (desktop), on the
    side toward the radar centre (StationLayer.placeLabels: .lab-above/-below/-left/-right). */
@@ -870,6 +891,11 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 /* TPulso: the selected platform's direction of travel: a small chip (Pulse pill style) beside the marker,
    its arrow turning with the map. No other marker shows a direction. */
 .station-dir {
+  opacity: 0;
+  scale: 0.6;
+  transition:
+    opacity 200ms ease-out,
+    scale 200ms ease-out;
   position: absolute;
   left: calc(50% + var(--size) / 2 + 3px);
   top: 50%;
@@ -893,4 +919,73 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   display: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
+}
+
+.station.is-selected .station-dir {
+  opacity: 1;
+  scale: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .station::before,
+  .spread-anim .station,
+  .station-dir {
+    transition: none;
+  }
+}
+
+/* --- TPulso: station list of an expanded area point ---------------------------------------------
+ * Rows stay in place; the picked row expands (height via grid rows, plus opacity, 200 ms ease-out) and the
+ * previous one collapses. Switching list ↔ platform inside the open panel cross-fades (150 ms). */
+.area-row {
+  transition: background-color 200ms ease-out, box-shadow 200ms ease-out;
+}
+.area-row:hover {
+  background: var(--surface-2);
+}
+.area-row.is-on {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.area-row-letter {
+  background: var(--radar);
+  color: var(--background);
+  transition: background-color 200ms ease-out, color 200ms ease-out;
+}
+.area-row.is-on .area-row-letter {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.area-row-more {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 200ms ease-out,
+    opacity 200ms ease-out;
+}
+.area-row-more.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.area-row-more > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.panel-swap {
+  animation: panel-swap 150ms ease-out both;
+}
+@keyframes panel-swap {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .area-row,
+  .area-row-letter,
+  .area-row-more {
+    transition: none;
+  }
+  .panel-swap {
+    animation: none;
+  }
 }

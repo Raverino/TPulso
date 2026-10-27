@@ -76,8 +76,10 @@ const DIR_CHIP = `<svg viewBox="0 0 10 10" width="10" height="10"><path d="M5 1 
  * - `withLabel`: the short name (≤ 22 characters) is in the icon, shown only when tapped or hovered (desktop),
  *   on the side toward the radar's centre (StationLayer.placeLabels). Expanded stations have none (the list).
  */
-function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel = true) {
-  const heading = selected && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
+function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel = true, chip = false) {
+  // `chip`: include the direction chip even when not selected (CSS shows it only on .is-selected), so a
+  // selection can change by toggling a class, without a new icon.
+  const heading = (selected || chip) && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
   const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${badge ?? ""}|${withLabel ? 1 : 0}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
@@ -103,11 +105,12 @@ function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel
 const spreadIconCache = new Map<string, L.DivIcon>();
 /**
  * TPulso: a station of an expanded area point, with its letter. It flies out from the area point's centre
- * (dx, dy = its offset) over 0.5 s, and back in when the area point collapses (closing). Cached, so a relayout
- * (after a pan or a turn of the map) only moves the marker and never replays the animation.
+ * (dx, dy = its offset) over 0.5 s, and back in when the area point collapses (closing). The icon never depends
+ * on the selection (StationLayer toggles .is-selected on the element), and it is cached: a selection change, a
+ * pan or a turn of the map only moves or restyles the marker and never replays an animation.
  */
-function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean, letter: string, picked: boolean) {
-  const base = stationIcon(s, picked, letter, false);
+function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean, letter: string) {
+  const base = stationIcon(s, false, letter, false, true);
   const key = `${(base.options.html as string).length}|${base.options.html as string}|${dx}|${dy}|${closing ? 1 : 0}`;
   const hit = spreadIconCache.get(key);
   if (hit) return hit;
@@ -120,11 +123,20 @@ function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boole
   return icon;
 }
 
-/** TPulso: the subtle dark disc under an expanded area point (never catches taps). */
+const discIconCache = new Map<string, L.DivIcon>();
+/** TPulso: the subtle dark disc under an expanded area point (never catches taps). Cached: never re-created. */
 function spreadDiscIcon(radiusPx: number, closing: boolean) {
   const d = Math.round(radiusPx * 2);
-  return L.divIcon({ className: "spread-disc-marker", iconSize: [d, d], iconAnchor: [d / 2, d / 2], html: `<div class="spread-disc${closing ? " is-closing" : ""}"></div>` });
+  const key = `${d}|${closing ? 1 : 0}`;
+  let icon = discIconCache.get(key);
+  if (!icon) {
+    icon = L.divIcon({ className: "spread-disc-marker", iconSize: [d, d], iconAnchor: [d / 2, d / 2], html: `<div class="spread-disc${closing ? " is-closing" : ""}"></div>` });
+    discIconCache.set(key, icon);
+  }
+  return icon;
 }
+/** The thin line from a spread station to its real place (constant: never re-styled). */
+const SPREAD_LINK_STYLE = { color: "var(--radar)", weight: 1, opacity: 0.5 };
 
 /** Spread and collapse take this long (CSS uses the same 500 ms). */
 const SPREAD_MS = 500;
@@ -378,6 +390,40 @@ const StationLayer = memo(function StationLayer({
     return new Map(singles.map((x, i) => [x.key, ini[i]!]));
   }, [clusters, byId]);
 
+  // The spread's geometry: recomputed only when the map moves or turns (layoutTick), never on a selection.
+  const geom = useMemo(() => {
+    if (!expanded) return null;
+    const c = clusters.find((x) => x.members.join(",") === expanded);
+    if (!c) return null;
+    const centre = map.unproject([c.x, c.y], zoom);
+    const ordered = spreadIds.map((id) => byId.get(id)).filter((st): st is MapStation => !!st);
+    const offsets = spreadOffsets(ordered.length);
+    const cp = map.latLngToContainerPoint(centre);
+    return {
+      centre,
+      ringR: Math.max(...offsets.map((o) => Math.hypot(o.dx, o.dy))),
+      items: ordered.map((st, i) => {
+        const pos = map.containerPointToLatLng([cp.x + offsets[i]!.dx, cp.y + offsets[i]!.dy]);
+        return { st, letter: letterFor(i), ...offsets[i]!, pos, link: [[st.lat, st.lng], pos] as L.LatLngExpression[] };
+      }),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, spreadIds, byId, clusters, zoom, map, layoutTick]);
+  const pickHandlers = useMemo(
+    () => new Map((geom?.items ?? []).map((it) => [it.st.id, { click: () => onPick(it.st.id) }])),
+    [geom, onPick],
+  );
+  // The selection is a class on the existing marker elements (CSS transitions do the rest): no new icons.
+  const spreadMarkers = useRef(new Map<string, L.Marker>());
+  const closingNow = spread?.closing ?? false;
+  // An effect (not a layout effect): react-leaflet adds the markers to the map in its own effects, which run first.
+  useEffect(() => {
+    for (const [id, m] of spreadMarkers.current) {
+      m.getElement()?.querySelector(".station")?.classList.toggle("is-selected", id === pickedId);
+      m.setZIndexOffset(id === pickedId ? 3500 : 3000);
+    }
+  }, [pickedId, geom, closingNow]);
+
   // Station focus: only the tapped station.
   if (selectedStopId) {
     const s = byId.get(selectedStopId);
@@ -421,39 +467,35 @@ const StationLayer = memo(function StationLayer({
         }
         // Spread: each station on a small upright circle around the area point (screen pixels, laid out again
         // when the map pans or turns), with a thin line to its real place, over a subtle dark disc. Letters only:
-        // the names are in the station list. Stations fly out (and back in).
+        // the names are in the station list. Stations fly out (and back in). Stable keys, icons and props: a
+        // selection change re-creates nothing (see the layout effect above).
+        if (!geom) return null;
         const closing = spread!.closing;
-        void layoutTick;
-        const ordered = spreadIds.map((id) => byId.get(id)).filter((s): s is MapStation => !!s);
-        const offsets = spreadOffsets(ordered.length);
-        const ringR = Math.max(...offsets.map((o) => Math.hypot(o.dx, o.dy)));
-        const cp = map.latLngToContainerPoint(centre);
         return (
           <Fragment key={`spread-${key}`}>
-            <Marker position={centre} icon={spreadDiscIcon(ringR + 30, closing)} interactive={false} keyboard={false} zIndexOffset={2000} />
-            {ordered.map((s, i) => {
-              const { dx, dy } = offsets[i]!;
-              const pos = map.containerPointToLatLng([cp.x + dx, cp.y + dy]);
-              const picked = pickedId === s.id;
-              return (
-                <Fragment key={`spread-${s.id}`}>
-                  {/* keyed by phase: the line is re-created to play its fade-out */}
-                  <Polyline
-                    key={closing ? "out" : "in"}
-                    positions={[[s.lat, s.lng], pos]}
-                    className={`spread-link${closing ? " is-closing" : ""}`}
-                    pathOptions={{ color: "var(--radar)", weight: 1, opacity: 0.5 }}
-                    interactive={false}
-                  />
-                  <Marker
-                    position={pos}
-                    icon={spreadStationIcon(s, dx, dy, closing, letterFor(i), picked)}
-                    zIndexOffset={picked ? 3500 : 3000}
-                    eventHandlers={{ click: () => onPick(s.id) }}
-                  />
-                </Fragment>
-              );
-            })}
+            <Marker position={geom.centre} icon={spreadDiscIcon(geom.ringR + 30, closing)} interactive={false} keyboard={false} zIndexOffset={2000} />
+            {geom.items.map((it) => (
+              <Fragment key={`spread-${it.st.id}`}>
+                {/* keyed by phase: the line is re-created only to play its fade-out on collapse */}
+                <Polyline
+                  key={closing ? "out" : "in"}
+                  positions={it.link}
+                  className={`spread-link${closing ? " is-closing" : ""}`}
+                  pathOptions={SPREAD_LINK_STYLE}
+                  interactive={false}
+                />
+                <Marker
+                  ref={(m) => {
+                    if (m) spreadMarkers.current.set(it.st.id, m);
+                    else spreadMarkers.current.delete(it.st.id);
+                  }}
+                  position={it.pos}
+                  icon={spreadStationIcon(it.st, it.dx, it.dy, closing, it.letter)}
+                  zIndexOffset={3000}
+                  eventHandlers={pickHandlers.get(it.st.id)!}
+                />
+              </Fragment>
+            ))}
           </Fragment>
         );
       })}
