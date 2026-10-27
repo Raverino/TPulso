@@ -18,7 +18,7 @@ import {
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES, MODE_COLORS } from "@/config";
-import { clusterScreen, layoutSpreadLabels, spreadOffsets, type SpreadLabel } from "@/offline/stations";
+import { clusterScreen, letterFor, letterOrder, shortLabel, spreadOffsets } from "@/offline/stations";
 import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
@@ -66,14 +66,18 @@ export interface RouteStopMarker {
 }
 
 const stationIconCache = new Map<string, L.DivIcon>();
+const DIR_CHIP = `<svg viewBox="0 0 10 10" width="10" height="10"><path d="M5 1 L8.5 8.5 L5 6.6 L1.5 8.5 Z" fill="currentColor"/></svg>`;
 /**
- * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap. Only the selected
- * platform shows its direction: a small chip with an arrow (it turns with the map: --bearing). The name is in
- * the icon but only shown for the tapped station and on hover (desktop); see .station-label in styles.css.
+ * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap.
+ * - `selected` (tapped, or picked in an expanded area point): highlighted; a platform also shows its direction
+ *   as a small chip with an arrow (it turns with the map: --bearing).
+ * - `letter`: a station of an expanded area point carries a letter badge (A, B…) instead of a name.
+ * - Otherwise the short name (≤ 22 characters) is in the icon, shown only when tapped or hovered (desktop),
+ *   on the side toward the radar's centre (StationLayer.placeLabels).
  */
-function stationIcon(s: MapStation, selected: boolean) {
+function stationIcon(s: MapStation, selected: boolean, letter?: string) {
   const heading = selected && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
-  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}`;
+  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${letter ?? ""}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
   const n = Math.max(1, s.modes.length);
@@ -81,69 +85,42 @@ function stationIcon(s: MapStation, selected: boolean) {
     ? `conic-gradient(${s.modes.map((m, i) => `${MODE_VAR[m]} ${(i * 100) / n}% ${((i + 1) * 100) / n}%`).join(", ")})`
     : MODE_VAR[s.modes[0] ?? "bus"];
   const box = Math.max(28, s.size + 4);
+  const dir = heading !== null ? `<span class="station-dir" style="--heading:${heading}deg" aria-hidden="true">${DIR_CHIP}</span>` : "";
+  const tag = letter ? `<span class="station-letter">${esc(letter)}</span>` : `<span class="station-label lab-above">${esc(shortLabel(s.name))}</span>`;
   const icon = L.divIcon({
     className: "",
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
-    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${heading !== null ? `<span class="station-dir" style="--heading:${heading}deg" aria-hidden="true"><svg viewBox="0 0 10 10" width="10" height="10"><path d="M5 1 L8.5 8.5 L5 6.6 L1.5 8.5 Z" fill="currentColor"/></svg></span>` : ""}<span class="station-label">${esc(s.name)}</span></div>`,
+    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${dir}${tag}</div>`,
   });
   stationIconCache.set(key, icon);
   return icon;
 }
 
+const spreadIconCache = new Map<string, L.DivIcon>();
 /**
- * TPulso: a station of a spread area point. It flies out from the area point's centre (dx, dy = its offset)
- * over 0.5 s, and back in when the area point collapses (closing).
+ * TPulso: a station of an expanded area point, with its letter. It flies out from the area point's centre
+ * (dx, dy = its offset) over 0.5 s, and back in when the area point collapses (closing). Cached, so a relayout
+ * (after a pan or a turn of the map) only moves the marker and never replays the animation.
  */
-function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean) {
-  const base = stationIcon(s, false);
-  const o = base.options;
-  return L.divIcon({
-    ...o,
-    html: `<div class="spread-anim${closing ? " is-closing" : ""}" style="--fx:${-dx}px;--fy:${-dy}px">${o.html as string}</div>`,
+function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean, letter: string, picked: boolean) {
+  const base = stationIcon(s, picked, letter);
+  const key = `${(base.options.html as string).length}|${base.options.html as string}|${dx}|${dy}|${closing ? 1 : 0}`;
+  const hit = spreadIconCache.get(key);
+  if (hit) return hit;
+  if (spreadIconCache.size > 400) spreadIconCache.clear();
+  const icon = L.divIcon({
+    ...base.options,
+    html: `<div class="spread-anim${closing ? " is-closing" : ""}" style="--fx:${-dx}px;--fy:${-dy}px">${base.options.html as string}</div>`,
   });
+  spreadIconCache.set(key, icon);
+  return icon;
 }
 
-/** TPulso: the translucent, blurred disc under a spread area point (never catches taps). */
+/** TPulso: the subtle dark disc under an expanded area point (never catches taps). */
 function spreadDiscIcon(radiusPx: number, closing: boolean) {
   const d = Math.round(radiusPx * 2);
   return L.divIcon({ className: "spread-disc-marker", iconSize: [d, d], iconAnchor: [d / 2, d / 2], html: `<div class="spread-disc${closing ? " is-closing" : ""}"></div>` });
-}
-
-/** Names of a spread area point (radial layout from layoutSpreadLabels), with leader lines where needed. */
-function spreadLabelsIcon(
-  labels: readonly SpreadLabel[],
-  items: readonly { dx: number; dy: number; half: number; name: string }[],
-  closing: boolean,
-) {
-  let lines = "";
-  let spans = "";
-  labels.forEach((l, i) => {
-    const it = items[i]!;
-    if (!l.width) return;
-    const ay = l.y + 8;
-    if (l.leader) {
-      const mx = it.dx + (l.side === "right" ? it.half : -it.half);
-      const lx = l.side === "right" ? l.x : l.x + l.width;
-      lines += `<line x1="${mx}" y1="${it.dy}" x2="${lx}" y2="${ay}"/>`;
-    }
-    spans += `<span class="spread-label" style="left:${Math.round(l.x)}px;top:${Math.round(l.y)}px;width:${Math.round(l.width)}px">${esc(it.name)}</span>`;
-  });
-  return L.divIcon({
-    className: "spread-labels-marker",
-    iconSize: [0, 0],
-    iconAnchor: [0, 0],
-    html: `<div class="spread-labels${closing ? " is-closing" : ""}"><svg class="spread-leaders" width="1" height="1">${lines}</svg>${spans}</div>`,
-  });
-}
-
-let measureCtx: CanvasRenderingContext2D | null = null;
-/** Width a name needs in the label style (600 10px DM Sans, 6 px padding each side). */
-function labelWidth(name: string): number {
-  measureCtx ??= document.createElement("canvas").getContext("2d");
-  if (!measureCtx) return name.length * 6 + 12;
-  measureCtx.font = '600 10px "DM Sans", sans-serif';
-  return Math.ceil(measureCtx.measureText(name).width) + 13;
 }
 
 /** Spread and collapse take this long (CSS uses the same 500 ms). */
@@ -205,7 +182,7 @@ const locateIcon = L.divIcon({
 });
 
 const areaIconCache = new Map<string, L.DivIcon>();
-/** Area point: a ring split into the colours of its modes, with the number of stations inside. */
+/** Area point: a ring split into the colours of its modes, with the number of places inside. */
 function areaIcon(modes: TransportMode[], count: number) {
   const key = `${modes.join(",")}|${count}`;
   const hit = areaIconCache.get(key);
@@ -225,24 +202,37 @@ function areaIcon(modes: TransportMode[], count: number) {
 }
 
 const MODE_ORDER: TransportMode[] = ["bus", "tram", "train", "ferry"];
+type LabelSide = "above" | "below" | "left" | "right";
 
 /**
- * TPulso: stations on the map in two levels. Level 1 (one marker per station) comes from App; level 2 groups
- * station markers closer than 45 px on screen at the current zoom into area points (deterministic, see
- * clusterScreen). Tapping an area point spreads its stations on a small circle; tapping the background, zooming
- * or selecting something else collapses it again. In station focus only the selected station is shown.
+ * TPulso: stations on the map in two levels. Level 1 (one marker per platform or place) comes from App; level 2
+ * groups markers closer than 45 px on screen at the current zoom (deterministic, see clusterScreen):
+ * - two or more different places: an area point with their number;
+ * - the platforms of one place: a plain ring in the mode colour, no number.
+ * Tapping either spreads its stations on a small upright circle, each with a letter (A, B…, see letterOrder),
+ * and opens the station list in the side panel (onArea). A first tap on a letter (or its row) picks that
+ * platform (highlighted on both); a second tap opens it. Tapping the background, zooming or selecting something
+ * else collapses it; turning the map lays the letters out again. In station focus only the tapped one is shown.
  */
 const StationLayer = memo(function StationLayer({
   stations,
   selectedStopId,
   onSelectStop,
   collapseKey,
+  pickedId,
+  onPick,
+  onArea,
 }: {
   stations: MapStation[];
   selectedStopId: string | null;
   onSelectStop: (id: string) => void;
-  /** Changes when something else is selected: collapse any spread area point. */
+  /** Changes when something else is selected (or the station list is closed): collapse the area point. */
   collapseKey: string;
+  /** The platform picked in the expanded area point (map letter or list row). */
+  pickedId: string | null;
+  onPick: (id: string) => void;
+  /** The stations of the expanded area point in letter order (null when none is expanded). */
+  onArea: (ids: string[] | null) => void;
 }) {
   const map = useMap();
   const [zoom, setZoom] = useState(() => map.getZoom());
@@ -266,17 +256,20 @@ const StationLayer = memo(function StationLayer({
     click: () => collapse(true), // background tap: animate back in
   });
   useEffect(() => collapse(false), [collapseKey, collapse]);
+  // Lay the spread out again after a pan or a turn of the map (at most once per frame while turning).
   const [layoutTick, setLayoutTick] = useState(0);
   useEffect(() => {
-    const rotate = () => collapse(false);
-    const moved = () => setLayoutTick((n) => n + 1);
-    map.on("rotate", rotate);
-    map.on("moveend", moved);
-    return () => {
-      map.off("rotate", rotate);
-      map.off("moveend", moved);
+    let raf = 0;
+    const relayout = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setLayoutTick((n) => n + 1));
     };
-  }, [map, collapse]);
+    map.on("rotate moveend", relayout);
+    return () => {
+      cancelAnimationFrame(raf);
+      map.off("rotate moveend", relayout);
+    };
+  }, [map]);
   // While spread: vehicles and route lines fade to 25 % (CSS on the map container, transition 0.5 s).
   const spreadOpen = !!spread && !spread.closing && !selectedStopId;
   useEffect(() => {
@@ -286,42 +279,56 @@ const StationLayer = memo(function StationLayer({
   }, [map, spreadOpen]);
   const expanded = spread?.key ?? null;
 
-  // Labels (tapped station, hovered marker): keep each inside the radar circle — shift it sideways, or put it
-  // under the marker when there is no room above. Only one label can show at a time (the tapped station in
-  // station focus, else the hovered marker), so labels never overlap.
-  const placeLabels = useCallback((only?: Element) => {
-    const container = map.getContainer();
-    const root = container.parentElement;
-    if (!root) return;
-    const cs = getComputedStyle(root);
-    const box = root.getBoundingClientRect();
-    const cx = box.left + parseFloat(cs.getPropertyValue("--x")), cy = box.top + parseFloat(cs.getPropertyValue("--y"));
-    const r = parseFloat(cs.getPropertyValue("--r"));
-    if (!(r > 0)) return;
-    const labels = only ? [only] : [...container.querySelectorAll(".station.is-selected .station-label")];
-    for (const el of labels as HTMLElement[]) {
-      el.style.setProperty("--lx", "0px");
-      el.classList.remove("is-below");
-      const fit = (): number | null => {
-        const b = el.getBoundingClientRect();
-        const dy = Math.max(Math.abs(b.top - cy), Math.abs(b.bottom - cy));
-        if (dy >= r - 2) return null;
-        const half = Math.sqrt(r * r - dy * dy) - 6; // the circle's width at the label's worst row
-        if (b.width > 2 * half) return null;
-        return b.left < cx - half ? cx - half - b.left : b.right > cx + half ? cx + half - b.right : 0;
-      };
-      let shift = fit();
-      if (shift === null) {
-        el.classList.add("is-below");
-        shift = fit();
-        if (shift === null) {
-          el.classList.remove("is-below");
-          shift = 0;
+  const byId = useMemo(() => new Map(stations.map((s) => [s.id, s])), [stations]);
+  // The expanded stations in letter order (same-named platforms get adjacent letters); tell App (station list).
+  const spreadIds = useMemo(
+    () => (expanded ? letterOrder(expanded.split(",").map((id) => byId.get(id)).filter((s): s is MapStation => !!s)).map((s) => s.id) : []),
+    [expanded, byId],
+  );
+  const spreadIdsKey = spreadIds.join(",");
+  useEffect(() => {
+    onArea(spreadOpen && spreadIdsKey ? spreadIdsKey.split(",") : null);
+  }, [spreadOpen, spreadIdsKey, onArea]);
+
+  // A single label (tapped marker, or hovered on desktop), on the side toward the radar's centre so it never
+  // crosses the ring; if that side has no room, the next side toward the centre. The direction chip of a
+  // tapped platform goes on the other side (data-lab on the marker).
+  const placeLabels = useCallback(
+    (only?: Element) => {
+      const container = map.getContainer();
+      const root = container.parentElement;
+      if (!root) return;
+      const cs = getComputedStyle(root);
+      const box = root.getBoundingClientRect();
+      const cx = box.left + parseFloat(cs.getPropertyValue("--x")), cy = box.top + parseFloat(cs.getPropertyValue("--y"));
+      const r = parseFloat(cs.getPropertyValue("--r"));
+      if (!(r > 0)) return;
+      const labels = only ? [only] : [...container.querySelectorAll(".station.is-selected .station-label")];
+      for (const el of labels as HTMLElement[]) {
+        const st = el.parentElement as HTMLElement;
+        const m = st.getBoundingClientRect();
+        const vx = cx - (m.left + m.width / 2), vy = cy - (m.top + m.height / 2);
+        const h: LabelSide = vx >= 0 ? "right" : "left", v: LabelSide = vy >= 0 ? "below" : "above";
+        const opp = { left: "right", right: "left", above: "below", below: "above" } as const;
+        const order: LabelSide[] = Math.abs(vx) >= Math.abs(vy) ? [h, v, opp[v], opp[h]] : [v, h, opp[h], opp[v]];
+        const inside = () => {
+          const b = el.getBoundingClientRect();
+          return [[b.left, b.top], [b.right, b.top], [b.left, b.bottom], [b.right, b.bottom]].every(([x, y]) => Math.hypot(x! - cx, y! - cy) <= r - 3);
+        };
+        let chosen = order[0]!;
+        for (const side of order) {
+          el.className = `station-label lab-${side}`;
+          if (inside()) {
+            chosen = side;
+            break;
+          }
         }
+        el.className = `station-label lab-${chosen}`;
+        st.dataset.lab = chosen;
       }
-      el.style.setProperty("--lx", `${Math.round(shift)}px`);
-    }
-  }, [map]);
+    },
+    [map],
+  );
   useLayoutEffect(() => {
     placeLabels();
     const again = () => placeLabels();
@@ -340,7 +347,6 @@ const StationLayer = memo(function StationLayer({
     [placeLabels],
   );
 
-  const byId = useMemo(() => new Map(stations.map((s) => [s.id, s])), [stations]);
   const clusters = useMemo(() => {
     const pts = stations.map((s) => {
       const p = map.project([s.lat, s.lng], zoom);
@@ -369,44 +375,43 @@ const StationLayer = memo(function StationLayer({
         const key = c.members.join(",");
         const centre = map.unproject([c.x, c.y], zoom);
         if (expanded !== key) {
+          const places = new Set(members.map((s) => s.name)).size; // platforms of one place share its name
           const modes = MODE_ORDER.filter((m) => members.some((s) => s.modes.includes(m)));
-          // Counted by name: the two sides of a street (two platforms) are one station.
-          const named = new Set(members.map((s) => s.name)).size; // by the place name shown (platforms share it)
+          if (places === 1) {
+            // One place, several platforms: a plain ring (no number); tapping it lets you pick the direction.
+            const first = members[0]!;
+            const ring: MapStation = { ...first, modes, kind: "station", heading: null, size: Math.max(...members.map((s) => s.size)) };
+            return (
+              <Marker key={`place-${key}`} position={centre} icon={stationIcon(ring, false)} riseOnHover zIndexOffset={100} eventHandlers={{ click: () => expand(key), ...hoverHandlers }} />
+            );
+          }
           return (
             <Marker
               key={`area-${key}`}
               position={centre}
-              icon={areaIcon(modes, named)}
-              title={`${named} station${named === 1 ? "" : "s"}`}
+              icon={areaIcon(modes, places)}
+              title={`${places} stations`}
               zIndexOffset={100}
               eventHandlers={{ click: () => expand(key) }}
             />
           );
         }
-        // Spread: each station on a small upright circle around the area point (screen pixels, so it stays
-        // upright on a turned map), with a thin line to its real place, over a blurred disc, and its name
-        // outside the circle (radial layout, never overlapping or cut off). Stations fly out (and back in).
+        // Spread: each station on a small upright circle around the area point (screen pixels, laid out again
+        // when the map pans or turns), with a thin line to its real place, over a subtle dark disc. Letters only:
+        // the names are in the station list. Stations fly out (and back in).
         const closing = spread!.closing;
-        void layoutTick; // re-laid out after a pan (the radar circle stays, the map moves)
-        const offsets = spreadOffsets(members.length);
+        void layoutTick;
+        const ordered = spreadIds.map((id) => byId.get(id)).filter((s): s is MapStation => !!s);
+        const offsets = spreadOffsets(ordered.length);
         const ringR = Math.max(...offsets.map((o) => Math.hypot(o.dx, o.dy)));
         const cp = map.latLngToContainerPoint(centre);
-        const root = map.getContainer().parentElement;
-        const rs = root ? getComputedStyle(root) : null;
-        const circle = {
-          cx: (rs ? parseFloat(rs.getPropertyValue("--x")) : cp.x) - cp.x,
-          cy: (rs ? parseFloat(rs.getPropertyValue("--y")) : cp.y) - cp.y,
-          r: rs ? parseFloat(rs.getPropertyValue("--r")) || 200 : 200,
-        };
-        const items = members.map((s, i) => ({ ...offsets[i]!, half: Math.max(28, s.size + 4) / 2, width: labelWidth(s.name), name: s.name }));
-        const labels = layoutSpreadLabels(items, circle);
         return (
           <Fragment key={`spread-${key}`}>
             <Marker position={centre} icon={spreadDiscIcon(ringR + 30, closing)} interactive={false} keyboard={false} zIndexOffset={2000} />
-            <Marker position={centre} icon={spreadLabelsIcon(labels, items, closing)} interactive={false} keyboard={false} zIndexOffset={2500} />
-            {members.map((s, i) => {
+            {ordered.map((s, i) => {
               const { dx, dy } = offsets[i]!;
               const pos = map.containerPointToLatLng([cp.x + dx, cp.y + dy]);
+              const picked = pickedId === s.id;
               return (
                 <Fragment key={`spread-${s.id}`}>
                   {/* keyed by phase: the line is re-created to play its fade-out */}
@@ -419,10 +424,9 @@ const StationLayer = memo(function StationLayer({
                   />
                   <Marker
                     position={pos}
-                    icon={spreadStationIcon(s, dx, dy, closing)}
-                    zIndexOffset={3000}
-                    riseOnHover
-                    eventHandlers={{ click: () => onSelectStop(s.id), ...hoverHandlers }}
+                    icon={spreadStationIcon(s, dx, dy, closing, letterFor(i), picked)}
+                    zIndexOffset={picked ? 3500 : 3000}
+                    eventHandlers={{ click: () => (picked ? onSelectStop(s.id) : onPick(s.id)) }}
                   />
                 </Fragment>
               );
@@ -756,6 +760,12 @@ interface Props {
   selectedStopId: string | null;
   /** Incremented by the top bar's recentre button. */
   recenterRequest: number;
+  /** Expanded area point: the platform picked (map letter or list row), and the station list (letter order). */
+  pickedId: string | null;
+  onPick: (id: string) => void;
+  onArea: (ids: string[] | null) => void;
+  /** Incremented when the station list is closed: collapse the area point. */
+  areaCloseRequest: number;
   /** TPulso: tram, metro, train and ferry lines of the region, drawn at every radius. */
   baseLines: TransitRoute[];
 }
@@ -990,6 +1000,10 @@ export default memo(function TransitMap({
   onSelectStop,
   selectedStopId,
   recenterRequest,
+  pickedId,
+  onPick,
+  onArea,
+  areaCloseRequest,
   baseLines,
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
@@ -1094,7 +1108,11 @@ export default memo(function TransitMap({
 
       {/* TPulso: stations (level 1) grouped into area points on screen (level 2); station focus shows one. */}
       {!selected && !focusStop && (
-        <StationLayer stations={stations} selectedStopId={selectedStopId} onSelectStop={onSelectStop} collapseKey={`${selectedId ?? ""}|${selectedStopId ?? ""}`} />
+        <StationLayer stations={stations} selectedStopId={selectedStopId} onSelectStop={onSelectStop} collapseKey={`${selectedId ?? ""}|${selectedStopId ?? ""}|${areaCloseRequest}`}
+          pickedId={pickedId}
+          onPick={onPick}
+          onArea={onArea}
+        />
       )}
 
       {/* TPulso: whole lines (first stop to terminus), never clipped to the radar or to map areas. */}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TransportMode } from '../../shared/types';
 import nearStops from '../../fixtures/stops.near-test-1500m.json';
 import { encodePolyline, type AreaFile, type PatternData } from '../../shared/timetable';
-import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, layoutSpreadLabels, type SpreadLabel, type StationStop, type StopDirection, type StopKind } from './stations';
+import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, letterOrder, letterFor, shortLabel, type StationStop, type StopDirection, type StopKind } from './stations';
 
 // Real stops around Marquês de Pombal (fixture from the TML API).
 const bus = new Set<TransportMode>(['bus']);
@@ -94,42 +94,28 @@ describe('groupStations', () => {
   });
 });
 
-describe('layoutSpreadLabels', () => {
-  const circle = { cx: 0, cy: 0, r: 200 };
-  const overlap = (a: SpreadLabel, b: SpreadLabel) => a.width > 0 && b.width > 0 && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + 16 && b.y < a.y + 16;
-  const ring = (n: number, width = 120) => spreadOffsets(n).map(o => ({ ...o, half: 14, width }));
-
-  it('never lets two names overlap, nor a name cover a marker', () => {
-    for (const n of [2, 3, 5, 8, 12]) {
-      const items = ring(n);
-      const ls = layoutSpreadLabels(items, circle);
-      for (let i = 0; i < ls.length; i++) for (let j = i + 1; j < ls.length; j++) expect(overlap(ls[i]!, ls[j]!)).toBe(false);
-      for (const l of ls) {
-        for (const m of items) {
-          // the marker's box must not intersect the label's box
-          const hit = l.x < m.dx + m.half && m.dx - m.half < l.x + l.width && l.y < m.dy + m.half && m.dy - m.half < l.y + 16;
-          expect(hit).toBe(false);
-        }
-      }
-    }
+describe('letters of an expanded area point', () => {
+  it('orders by name so same-named platforms get adjacent letters, then by direction', () => {
+    const order = letterOrder([
+      { id: '3', name: 'Rato', heading: 180 },
+      { id: '1', name: 'Marquês Pombal', heading: 270 },
+      { id: '2', name: 'Rato', heading: 0 },
+      { id: '4', name: 'Amoreiras', heading: null },
+    ]);
+    expect(order.map(s => s.id)).toEqual(['4', '1', '2', '3']);
   });
-
-  it('keeps every name inside the radar circle, shortening long names', () => {
-    // The area point near the right edge of the radar: little room on the right.
-    const ls = layoutSpreadLabels(ring(6, 300), { cx: -120, cy: 0, r: 200 });
-    for (const l of ls) {
-      if (!l.width) continue;
-      for (const [x, y] of [[l.x, l.y], [l.x + l.width, l.y], [l.x, l.y + 16], [l.x + l.width, l.y + 16]] as const) {
-        expect(Math.hypot(x + 120, y)).toBeLessThanOrEqual(200);
-      }
-      expect(l.width).toBeLessThanOrEqual(150);
-    }
+  it('gives A, B, … Z, then AA', () => {
+    expect([0, 1, 25, 26, 27].map(letterFor)).toEqual(['A', 'B', 'Z', 'AA', 'AB']);
   });
+});
 
-  it('puts names on the side of their marker', () => {
-    const items = ring(4);
-    const ls = layoutSpreadLabels(items, circle);
-    ls.forEach((l, i) => expect(l.side).toBe(items[i]!.dx >= 0 ? 'right' : 'left'));
+describe('shortLabel', () => {
+  it('keeps short names and cuts long ones to 22 characters with an ellipsis', () => {
+    expect(shortLabel('Marquês Pombal')).toBe('Marquês Pombal');
+    const s = shortLabel('Mq. Pombal - R. Joaquim António Aguiar');
+    expect(s.length).toBeLessThanOrEqual(22);
+    expect(s.endsWith('…')).toBe(true);
+    expect(s.startsWith('Mq. Pombal - R.')).toBe(true);
   });
 });
 

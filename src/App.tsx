@@ -7,7 +7,7 @@ import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFro
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
 import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
-import { groupStations, stationSize, stopDirections } from "@/offline/stations";
+import { groupStations, letterFor, stationSize, stopDirections } from "@/offline/stations";
 import {
   clockSec,
   distanceMeters,
@@ -393,7 +393,7 @@ export default function App() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [panelView, setPanelView] = useState<"results" | "help" | "stop">("results");
+  const [panelView, setPanelView] = useState<"results" | "help" | "stop" | "area">("results");
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const exitRide = useCallback(() => {
     setRide(null);
@@ -416,7 +416,23 @@ export default function App() {
   const openPanel = useCallback((view: "help") => {
     setSelectedId(null);
     setOpenId(null);
+    setAreaCloseRequest((n) => n + 1);
     setPanelView(view);
+  }, []);
+
+  // TPulso: an expanded area point lists its stations in the side panel (letter, full name, direction,
+  // distance). A first tap on a row or map letter picks the platform (highlighted on both); a second opens it.
+  const [areaIds, setAreaIds] = useState<string[] | null>(null);
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const [areaCloseRequest, setAreaCloseRequest] = useState(0);
+  const onArea = useCallback((ids: string[] | null) => {
+    setAreaIds(ids);
+    setPickedId(null);
+    if (ids) {
+      setSelectedId(null);
+      setOpenId(null);
+      setPanelView("area");
+    } else setPanelView((v) => (v === "area" ? "results" : v));
   }, []);
   // A tapped station covers all of its stops (e.g. the six Marquês de Pombal platforms).
   const tappedStation = selectedStopId ? allStations.find((st) => st.id === selectedStopId) : undefined;
@@ -441,6 +457,16 @@ export default function App() {
       error: null,
     };
   }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive]);
+  const areaRows = useMemo(() => {
+    if (!areaIds) return null;
+    const byId = new Map(allStations.map((st) => [st.id, st]));
+    return areaIds.flatMap((id, i) => {
+      const st = byId.get(id);
+      return st
+        ? [{ id, letter: letterFor(i), name: st.name, towards: st.towards, modes: st.modes, distanceM: Math.round(distanceMeters(center, st)) }]
+        : [];
+    });
+  }, [areaIds, allStations, center]);
   const selectStop = useCallback(
     (id: string) => {
       setSelectedId(null);
@@ -860,6 +886,10 @@ export default function App() {
                 onSelectStop={selectStop}
                 selectedStopId={panelView === "stop" ? selectedStopId : null}
                 recenterRequest={recenterRequest}
+                pickedId={pickedId}
+                onPick={setPickedId}
+                onArea={onArea}
+                areaCloseRequest={areaCloseRequest}
                 baseLines={baseLines}
                 onSelect={onMapSelect}
               />
@@ -956,7 +986,11 @@ export default function App() {
           onPanelClose={() => {
             setPanelView("results");
             setSelectedStopId(null);
+            setAreaCloseRequest((n) => n + 1);
           }}
+          area={areaRows}
+          pickedId={pickedId}
+          onPickRow={(id) => (pickedId === id ? selectStop(id) : setPickedId(id))}
           now={now}
           boardAgeSec={0}
           boardStatus={{

@@ -330,70 +330,29 @@ export function spreadOffsets(n: number, minRadiusPx = 38, gapPx = 34): { dx: nu
   });
 }
 
-// ---- Names of a spread area point ------------------------------------------------------------------------
-
-export interface SpreadLabelItem {
-  /** Marker centre relative to the area point (screen px). */
-  dx: number;
-  dy: number;
-  /** Half the marker's size. */
-  half: number;
-  /** Width the full name needs (px, padding included). */
-  width: number;
-}
-
-export interface SpreadLabel {
-  /** Left edge and top of the label, relative to the area point (screen px). */
-  x: number;
-  y: number;
-  /** Width to give it (a longer name is shortened with an ellipsis). */
-  width: number;
-  side: 'left' | 'right';
-  /** Draw a thin line from the marker to the label (the label moved away from its marker's row). */
-  leader: boolean;
-}
+// ---- Letters of a spread area point ----------------------------------------------------------------------
 
 /**
- * Radial name layout around a spread area point: names on the right half go in a column to the right of the
- * ring of markers, the others to the left, each at its marker's height where possible. Within a column labels
- * are pushed apart so they never overlap; every label starts outside the ring (it never covers a marker) and
- * is narrowed to stay inside the radar circle (`circle`, relative to the area point).
+ * Order of the stations of an expanded area point, which is also their letter order (A, B, C…): by name, so
+ * same-named platforms get adjacent letters, then by direction (north first, clockwise), then by id (stable).
  */
-export function layoutSpreadLabels(
-  items: readonly SpreadLabelItem[],
-  circle: { cx: number; cy: number; r: number },
-  { height = 16, gap = 3, pad = 6, minWidth = 40, maxWidth = 150 } = {},
-): SpreadLabel[] {
-  // Radius that clears every marker box (corners included).
-  const ringR = Math.max(0, ...items.map(it => Math.hypot(it.dx, it.dy) + it.half * Math.SQRT2)) + pad;
-  const out: SpreadLabel[] = items.map(() => ({ x: 0, y: 0, width: 0, side: 'right', leader: false }));
-  const top = circle.cy - circle.r + 4, bottom = circle.cy + circle.r - 4;
-  for (const side of ['right', 'left'] as const) {
-    const idx = items.map((_, i) => i).filter(i => (side === 'right' ? items[i]!.dx >= 0 : items[i]!.dx < 0));
-    idx.sort((a, b) => items[a]!.dy - items[b]!.dy || a - b);
-    // Rows: each at its marker's height, pushed down to clear the previous one, then up to stay above `bottom`.
-    const ys = idx.map(i => items[i]!.dy - height / 2);
-    for (let k = 1; k < ys.length; k++) ys[k] = Math.max(ys[k]!, ys[k - 1]! + height + gap);
-    for (let k = ys.length - 1; k >= 0; k--) ys[k] = Math.min(ys[k]!, k === ys.length - 1 ? bottom - height : ys[k + 1]! - height - gap);
-    for (let k = 0; k < ys.length; k++) ys[k] = Math.max(ys[k]!, k === 0 ? top : ys[k - 1]! + height + gap);
-    idx.forEach((i, k) => {
-      const it = items[i]!;
-      const y = ys[k]!;
-      const mid = y + height / 2;
-      // Start outside the ring of markers at the label's widest row (so the label never covers one).
-      const nearest = y <= 0 && y + height >= 0 ? 0 : Math.min(Math.abs(y), Math.abs(y + height));
-      const clear = Math.sqrt(Math.max(0, ringR * ringR - nearest * nearest));
-      const start = Math.max(Math.abs(it.dx) + it.half + pad, clear);
-      // Room to the radar circle's edge at the label's worst row.
-      const dyMax = Math.max(Math.abs(y - circle.cy), Math.abs(y + height - circle.cy));
-      const halfChord = Math.sqrt(Math.max(0, circle.r * circle.r - dyMax * dyMax)) - 4;
-      const room = side === 'right' ? circle.cx + halfChord - start : start - (circle.cx - halfChord);
-      // Shortened (ellipsis) to the room left; with too little room for a readable name it is left out rather
-      // than cut off by the radar's edge.
-      const fitted = Math.min(it.width, maxWidth, room);
-      const width = fitted >= Math.min(minWidth, it.width) ? fitted : 0;
-      out[i] = { x: side === 'right' ? start : -start - width, y, width, side, leader: Math.abs(mid - it.dy) > 4 || start > Math.abs(it.dx) + it.half + pad + 2 };
-    });
-  }
-  return out;
+export function letterOrder<T extends { id: string; name: string; heading: number | null }>(stations: readonly T[]): T[] {
+  return [...stations].sort(
+    (a, b) =>
+      a.name.localeCompare(b.name, 'pt') ||
+      (a.heading ?? 999) - (b.heading ?? 999) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+/** A, B, … Z, then AA, AB … (an area point never has that many, but never repeat a letter). */
+export function letterFor(i: number): string {
+  return i < 26 ? String.fromCharCode(65 + i) : letterFor(Math.floor(i / 26) - 1) + String.fromCharCode(65 + (i % 26));
+}
+
+/** The map label of a single marker: at most `max` characters, ending in "…" when shortened (full name in the panel). */
+export function shortLabel(name: string, max = 22): string {
+  const n = name.trim();
+  if (n.length <= max) return n;
+  return n.slice(0, max - 1).trimEnd() + '…';
 }

@@ -1,5 +1,6 @@
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useClock } from "@/lib/clock";
+import { MODE_COLORS } from "@/config";
 import {
   ArrowLeft,
   Bus,
@@ -65,6 +66,16 @@ function DelayText({ delayMin }: { delayMin: number }) {
 }
 
 /** TPulso: a tapped stop and its departures in the next 10 minutes. */
+/** TPulso: a station of an expanded area point (side-panel list). */
+export interface AreaRow {
+  id: string;
+  letter: string;
+  name: string;
+  towards: string | null;
+  modes: TransportMode[];
+  distanceM: number;
+}
+
 export interface StopPanel {
   id: string;
   name: string;
@@ -96,7 +107,11 @@ interface Props {
   openId?: string | null;
   radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number }[];
   onOpen?: (id: string | null) => void;
-  panelView?: "results" | "help" | "stop";
+  panelView?: "results" | "help" | "stop" | "area";
+  /** Expanded area point: its stations (letter order), the picked one, and a row tap (pick, then open). */
+  area?: AreaRow[] | null;
+  pickedId?: string | null;
+  onPickRow?: (id: string) => void;
   onPanelClose?: () => void;
   // TPulso additions
   now: number;
@@ -184,6 +199,9 @@ export default function ArrivalsDrawer({
   tripStops = {},
   onToggleTrip,
   onSelectStop,
+  area = null,
+  pickedId = null,
+  onPickRow,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -413,7 +431,9 @@ export default function ArrivalsDrawer({
           className={`panel-layer absolute inset-0 flex flex-col bg-surface ${flipped ? "" : "is-away pointer-events-none"}`}
           aria-hidden={!flipped}
         >
-          {panelView === "help" ? (
+          {panelView === "area" && area ? (
+            <AreaList rows={area} pickedId={pickedId ?? null} onPick={onPickRow} onClose={onPanelClose} />
+          ) : panelView === "help" ? (
             <HelpPanel onClose={onPanelClose} info={help} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
             <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} onSelectStop={onSelectStop} />
@@ -432,6 +452,54 @@ export default function ArrivalsDrawer({
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * TPulso: the stations of an expanded area point. Each row: the letter shown on the map, the full name (wraps,
+ * never cut), the direction (platforms), the distance. A first tap picks the station (its letter on the map is
+ * highlighted too); a second tap, or "Departures", opens it.
+ */
+function AreaList({ rows, pickedId, onPick, onClose }: { rows: AreaRow[]; pickedId: string | null; onPick?: ((id: string) => void) | undefined; onClose: (() => void) | undefined }) {
+  const picked = useRef<HTMLLIElement | null>(null);
+  useEffect(() => picked.current?.scrollIntoView({ block: "nearest" }), [pickedId]);
+  return (
+    <div className="flex h-full flex-col">
+      <PanelHeader title={`Stations here · ${rows.length}`} icon={MapPin} onClose={onClose} />
+      <ul className="min-h-0 flex-1 touch-pan-y space-y-1 overflow-y-auto overscroll-contain p-2">
+        {rows.map((r) => {
+          const on = r.id === pickedId;
+          const Icon = ICONS[r.modes[0] ?? "bus"];
+          return (
+            <li key={r.id} ref={on ? picked : undefined}>
+              <div
+                role="button"
+                tabIndex={0}
+                aria-pressed={on}
+                onClick={() => onPick?.(r.id)}
+                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onPick?.(r.id)}
+                className={`flex cursor-pointer items-start gap-2.5 rounded-xl px-2.5 py-2 transition-colors ${on ? "bg-surface-2 ring-1 ring-primary" : "hover:bg-surface-2"}`}
+              >
+                <span className={`grid size-6 shrink-0 place-items-center rounded-full font-display text-[11px] font-black ${on ? "bg-primary text-primary-foreground" : "bg-[var(--radar)] text-background"}`}>
+                  {r.letter}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start gap-1.5 font-display text-sm font-bold leading-snug [overflow-wrap:anywhere]">
+                    <Icon className="mt-0.5 size-3.5 shrink-0" style={{ color: MODE_COLORS[r.modes[0] ?? "bus"] }} />
+                    <span>{r.name}</span>
+                  </div>
+                  {r.towards && <div className="text-xs text-foreground/80 [overflow-wrap:anywhere]">towards {r.towards}</div>}
+                  <div className="text-[11px] text-muted-foreground">{r.distanceM} m away</div>
+                  {on && (
+                    <span className="mt-1 inline-block text-xs font-bold text-primary">Tap again for departures →</span>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
