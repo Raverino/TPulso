@@ -35,7 +35,7 @@ export interface ConvertResult {
   /** Tram, metro, train and ferry line shapes for the whole region (identical shapes merged). */
   lines: LineShape[];
   feed: { version: string; publisher: string };
-  stats: { tripsInWindow: number; duplicateTrips: number; sameDayDuplicates: Record<string, number>; stopTimes: number; patterns: number; stops: number; shapePointsRaw: number; shapePointsKept: number };
+  stats: { tripsInWindow: number; duplicateTrips: number; sameDayDuplicates: Record<string, number>; nearDuplicateTrips: number; nearDuplicatesByOp: Record<string, number>; stopTimes: number; patterns: number; stops: number; shapePointsRaw: number; shapePointsKept: number };
 }
 
 const toSec = (t: string): number => {
@@ -159,6 +159,37 @@ export function sliceShape(shape: [number, number][], cum: number[], d0: number,
   return out;
 }
 
+/** Near duplicates are at most this far apart at every stop (seconds). */
+export const NEAR_DUPLICATE_S = 120;
+
+/**
+ * Merge near-duplicate trips of one pattern: two trips that run on a shared day with every stop time within
+ * 2 minutes are one vehicle listed twice. The first listing (in feed order) keeps the shared days; the later one
+ * keeps only its other days, and is dropped when none are left. Returns the trips kept and how many merged.
+ */
+export function mergeNearDuplicates(trips: readonly TripRow[], profiles: readonly number[][], maxS = NEAR_DUPLICATE_S): { kept: TripRow[]; merged: number } {
+  const rows = trips.map(t => [...t] as TripRow);
+  const order = rows.map((_, i) => i).sort((a, b) => rows[a]![0] - rows[b]![0] || a - b);
+  let merged = 0;
+  for (let x = 0; x < order.length; x++) {
+    const a = rows[order[x]!]!;
+    if (!a[2]) continue;
+    for (let y = x + 1; y < order.length; y++) {
+      const b = rows[order[y]!]!;
+      if (b[0] - a[0] > maxS) break;
+      if (!(a[2] & b[2])) continue;
+      const pa = profiles[a[1]]!, pb = profiles[b[1]]!;
+      if (pa.length !== pb.length || pa.some((v, k) => Math.abs(a[0] + v - (b[0] + pb[k]!)) > maxS)) continue;
+      // keep the earlier listing in feed order
+      const [keep, drop] = order[x]! < order[y]! ? [a, b] : [b, a];
+      drop[2] &= ~keep[2];
+      merged++;
+      if (!a[2]) break;
+    }
+  }
+  return { kept: rows.filter(r => r[2] !== 0), merged };
+}
+
 export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<ConvertResult> {
   // 1.5 m keeps curves such as the Marquês de Pombal roundabout (5 m cut its corners).
   const tol = opt.shapeToleranceM ?? 1.5;
@@ -279,6 +310,20 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
     seenTrips.set(dupKey, row);
   }
   trips.clear();
+  // Near duplicates: the same pattern listed twice with stop times up to 2 min apart (e.g. Carris 734 in the
+  // evening): one bus, shown twice. The first listing keeps the shared days.
+  let nearDuplicateTrips = 0;
+  const nearDuplicatesByOp: Record<string, number> = {};
+  for (const p of patterns.values()) {
+    const profiles = [...p.profiles.keys()].map(s => s.split(',').map(Number));
+    const r = mergeNearDuplicates(p.trips, profiles);
+    if (r.merged) {
+      p.trips = r.kept;
+      nearDuplicateTrips += r.merged;
+      const op = routes.get(p.route)!.op.id;
+      nearDuplicatesByOp[op] = (nearDuplicatesByOp[op] ?? 0) + r.merged;
+    }
+  }
   // Trips today per operator, counted after merging duplicates.
   const todayAfter = new Map<string, number>();
   for (const p of patterns.values()) {
@@ -374,6 +419,8 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
       tripsInWindow: [...patterns.values()].reduce((s, p) => s + p.trips.length, 0),
       duplicateTrips,
       sameDayDuplicates,
+      nearDuplicateTrips,
+      nearDuplicatesByOp,
       stopTimes, patterns: patterns.size, stops: stopIds.length, shapePointsRaw, shapePointsKept,
     },
   };

@@ -49,7 +49,7 @@ async function main() {
   const version = `${feedVersion.replace(/[^0-9A-Za-z-]/g, '')}_${today}`;
   const res = await convert(tml.source, { today, days, operators: OPERATORS, version });
   tml.close();
-  log(`• Converted: ${res.stats.tripsInWindow} trips (${res.stats.duplicateTrips} exact duplicates merged), ${res.stats.stopTimes} stop times, ${res.stats.patterns} route patterns, ${res.stats.stops} stops; shape points ${res.stats.shapePointsRaw} → ${res.stats.shapePointsKept}`);
+  log(`• Converted: ${res.stats.tripsInWindow} trips (${res.stats.duplicateTrips} exact and ${res.stats.nearDuplicateTrips} near duplicates merged${Object.keys(res.stats.nearDuplicatesByOp).length ? ` [near: ${Object.entries(res.stats.nearDuplicatesByOp).map(([o, n]) => `${o} ${n}`).join(", ")}]` : ""}), ${res.stats.stopTimes} stop times, ${res.stats.patterns} route patterns, ${res.stats.stops} stops; shape points ${res.stats.shapePointsRaw} → ${res.stats.shapePointsKept}`);
   const sd = Object.entries(res.stats.sameDayDuplicates);
   log(`• Same-day duplicate trips (listed twice for the same day): ${sd.length ? sd.map(([k, v]) => `${k} ${v}`).join(', ') : 'none'}; the rest were one trip listed under plans for different dates`);
 

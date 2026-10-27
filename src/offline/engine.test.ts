@@ -1,11 +1,11 @@
 // Engine tests on the converter's output for fixtures/gtfs-tml-sample (real rows of the TML regional feed).
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { serviceDayStartMs, type AreaFile, type Manifest, type RouteFile } from '../../shared/timetable';
+import { encodePolyline, serviceDayStartMs, type AreaFile, type Manifest, type RouteFile } from '../../shared/timetable';
 import { convert } from '../../scripts/timetable/convert';
 import { folderSource } from '../../scripts/timetable/gtfs';
 import { OPERATORS } from '../../scripts/timetable/operators';
-import { activeTrips, departuresAtStop, easeAlong, expectedVehicles, isExpired, pointAlong, positionsAt, routePath, tripStopsForRow, upcomingStops } from './engine';
+import { activeTrips, departuresAtStop, easeAlong, expectedVehicles, isExpired, pointAlong, positionOf, positionsAt, routePath, tripStopsForRow, upcomingStops, type ActiveTrip } from './engine';
 
 const TODAY = '20261025';
 const manifest: Pick<Manifest, 'window'> = { window: { first: TODAY, days: 14 } };
@@ -155,5 +155,25 @@ describe('animation helpers', () => {
     const now = at(8, 50);
     const idx = activeTrips(manifest, areas, now - 60_000, now + 60_000);
     expect(positionsAt(idx, now).map(v => v.key).sort()).toEqual(expectedVehicles(manifest, areas, now).map(v => v.key).sort());
+  });
+});
+
+describe('bus dwell cap (display)', () => {
+  // Three stops 500 m apart due north; the middle stop has a 90 s scheduled dwell (arrive 100 s, leave 190 s).
+  const pr = [0, 0, 100, 190, 300, 300];
+  const pattern = (mode: 'bus' | 'tram') => ({
+    id: 1, line: 'X', color: '', textColor: '', mode, op: 'carris', headsign: 'Norte', first: 0, total: 3,
+    stops: ['a', 'b', 'c'], dist: [0, 500, 1000], shape: encodePolyline([[38.72, -9.15], [38.7245, -9.15], [38.729, -9.15]]),
+    profiles: [pr], trips: [[0, 0, 1]] as [number, number, number][],
+  });
+  const trip = (mode: 'bus' | 'tram'): ActiveTrip => ({ key: 'k', p: pattern(mode), tripIndex: 0, serviceDate: '20261027', startMs: 0, pr, fromMs: 0, toMs: 300_000 });
+  it('shows a bus waiting at most 60 s: it arrives at 130 s instead of 100 s, and still leaves at 190 s', () => {
+    expect(positionOf(trip('bus'), 110_000)!.atStop).toBe(false); // still driving in
+    expect(positionOf(trip('bus'), 140_000)!.atStop).toBe(true);
+    expect(positionOf(trip('bus'), 189_000)!.atStop).toBe(true);
+    expect(positionOf(trip('bus'), 200_000)!.atStop).toBe(false);
+  });
+  it('keeps the scheduled dwell for other modes', () => {
+    expect(positionOf(trip('tram'), 110_000)!.atStop).toBe(true);
   });
 });

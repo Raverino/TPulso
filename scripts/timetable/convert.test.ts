@@ -12,7 +12,7 @@ import {
   modeOfRouteType,
   serviceDayStartMs,
 } from '../../shared/timetable.ts';
-import { convert, countTripsOn, cumulative, sliceShape, stopDistances } from './convert.ts';
+import { convert, countTripsOn, cumulative, mergeNearDuplicates, sliceShape, stopDistances } from './convert.ts';
 import { folderSource } from './gtfs.ts';
 import { OPERATORS } from './operators.ts';
 
@@ -188,5 +188,32 @@ describe('service days', () => {
   });
   it('adds days across month ends', () => {
     expect(addDays('20261031', 1)).toBe('20261101');
+  });
+});
+
+describe('near-duplicate trips (Carris 734 in the evening: the same bus listed twice)', () => {
+  // Two profiles of one 4-stop pattern: [arrival, departure] offsets; the second runs up to 2 min later.
+  const profiles = [
+    [0, 0, 300, 300, 600, 600, 900, 900],
+    [0, 0, 300, 360, 660, 660, 1020, 1020],
+  ];
+  const WEEKDAYS = 0b1111100111110;
+  it('merges a trip listed twice with every stop time within 2 minutes (same start, real 734 days)', () => {
+    const r = mergeNearDuplicates([[73500, 0, WEEKDAYS], [73500, 1, WEEKDAYS]], profiles);
+    expect(r.merged).toBe(1);
+    expect(r.kept).toEqual([[73500, 0, WEEKDAYS]]);
+  });
+  it('keeps trips 3 minutes apart, and trips on different days', () => {
+    expect(mergeNearDuplicates([[73500, 0, WEEKDAYS], [73680, 0, WEEKDAYS]], profiles).merged).toBe(0);
+    expect(mergeNearDuplicates([[73500, 0, 0b0001], [73500, 1, 0b0010]], profiles).merged).toBe(0);
+  });
+  it('keeps the later listing for the days the first does not run', () => {
+    const r = mergeNearDuplicates([[73500, 0, 0b0011], [73560, 0, 0b0110]], profiles);
+    expect(r.merged).toBe(1);
+    expect(r.kept).toEqual([[73500, 0, 0b0011], [73560, 0, 0b0100]]);
+  });
+  it('does not merge when one stop is more than 2 minutes off', () => {
+    const late = [[0, 0, 300, 300, 600, 600, 900, 900], [0, 0, 300, 300, 600, 600, 1030, 1030]];
+    expect(mergeNearDuplicates([[73500, 0, WEEKDAYS], [73500, 1, WEEKDAYS]], late).merged).toBe(0);
   });
 });

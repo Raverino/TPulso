@@ -578,8 +578,27 @@ function VehicleAnimator({
       if (!f.keys) shownList = shownList.filter((x) => x.d <= margin || x.v.key === ride);
       // Cap the DOM markers: the nearest ones (the ridden one always) when a busy area has too many.
       if (shownList.length > MAX_VEHICLE_MARKERS) shownList = shownList.sort((a, b) => (a.v.key === ride ? -1 : b.v.key === ride ? 1 : a.d - b.d)).slice(0, MAX_VEHICLE_MARKERS);
+      // Vehicles on exactly the same spot (e.g. two Metro trains at one platform pair, a bus listed at the same
+      // stop as another) would hide each other: fan them out by 11 px around that spot. Count unchanged; the
+      // ridden vehicle is never moved (the camera follows it).
+      const spot = new Map<string, number[]>();
+      const pts = shownList.map(({ v }) => map.latLngToLayerPoint([v.lat, v.lng]));
+      pts.forEach((p, i) => {
+        if (shownList[i]!.v.key === ride) return;
+        const k = `${Math.round(p.x / 3)}|${Math.round(p.y / 3)}`;
+        spot.set(k, [...(spot.get(k) ?? []), i]);
+      });
+      const fanned = new Map<number, L.LatLng>();
+      for (const idx of spot.values()) {
+        if (idx.length < 2) continue;
+        idx.forEach((i, j) => {
+          const a = -Math.PI / 2 + (2 * Math.PI * j) / idx.length;
+          fanned.set(i, map.layerPointToLatLng(pts[i]!.add([Math.cos(a) * VEHICLE_FAN_PX, Math.sin(a) * VEHICLE_FAN_PX])));
+        });
+      }
       const seen = new Set<string>();
-      for (const { v } of shownList) {
+      for (const [index, { v }] of shownList.entries()) {
+        const at = fanned.get(index) ?? L.latLng(v.lat, v.lng);
         if (v.key === ride) {
           // Heading up: ease the map's rotation towards the direction of travel (time constant 0.35 s, so
           // the turn at a corner or stop is smooth). Then the camera: same computed position, same frame.
@@ -595,13 +614,13 @@ function VehicleAnimator({
         }
         seen.add(v.key);
         const m = markers.get(v.key);
-        if (m) m.setLatLng([v.lat, v.lng]);
+        if (m) m.setLatLng(at);
         else {
           const veh: Vehicle = {
             id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
             lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
           };
-          const marker = L.marker([v.lat, v.lng], {
+          const marker = L.marker(at, {
             icon: vehicleIcon(veh),
             title: `${v.line} → ${v.headsign || "—"} · Expected position (timetable)`,
             zIndexOffset: v.key === ride ? 1500 : 600,
@@ -628,6 +647,8 @@ function VehicleAnimator({
   return null;
 }
 
+/** Vehicles on the same spot are fanned out this far (px) so none is hidden. */
+const VEHICLE_FAN_PX = 11;
 /** At most this many vehicle markers in the DOM (the nearest to the radar centre). */
 const MAX_VEHICLE_MARKERS = 60;
 

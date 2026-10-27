@@ -226,13 +226,19 @@ export function easeAlong(t: number, r = EASE_SHARE): number {
 }
 
 /** Where the timetable says this trip slice is at `nowMs` (null outside the slice's time span). */
+/** A bus is never shown waiting at a stop longer than this (s): with a longer scheduled dwell it is shown
+ * arriving later instead (never leaving early, so never ahead of the timetable). */
+export const BUS_DWELL_CAP_S = 60;
+
 export function positionOf(at: ActiveTrip, nowMs: number, ease = true): (ExpectedVehicle & { interior: boolean }) | null {
   if (nowMs < at.fromMs || nowMs > at.toMs) return null;
   const { p, pr } = at;
   const n = p.stops.length;
   const t = (nowMs - at.startMs) / 1000;
+  // Arrival used for display: for a bus, at most BUS_DWELL_CAP_S before the departure.
+  const arrAt = (k: number) => (p.mode === 'bus' ? Math.max(pr[k * 2]!, pr[k * 2 + 1]! - BUS_DWELL_CAP_S) : pr[k * 2]!);
   let i = 0;
-  while (i < n - 1 && t >= pr[(i + 1) * 2]!) i++; // i = last stop whose arrival has passed
+  while (i < n - 1 && t >= arrAt(i + 1)) i++; // i = last stop whose arrival has passed
   let pos: { lat: number; lng: number; bearing: number };
   let atStop = false;
   let next = 0;
@@ -243,7 +249,7 @@ export function positionOf(at: ActiveTrip, nowMs: number, ease = true): (Expecte
     atStop = true;
     next = i;
   } else {
-    const dep = pr[i * 2 + 1]!, arr = pr[(i + 1) * 2]!;
+    const dep = pr[i * 2 + 1]!, arr = arrAt(i + 1);
     f = arr > dep ? (t - dep) / (arr - dep) : 1;
     // Distance by arc length along the shape (pointAlong), with a short ease out of / into the stops.
     const g = ease ? easeAlong(f) : f;
