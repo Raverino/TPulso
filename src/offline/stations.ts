@@ -356,3 +356,37 @@ export function shortLabel(name: string, max = 22): string {
   if (n.length <= max) return n;
   return n.slice(0, max - 1).trimEnd() + '…';
 }
+
+// ---- Initials of single stations -------------------------------------------------------------------------
+
+/** Linking words are left out of initials ("Praça de Espanha" → "PE"). */
+const LINKING = new Set(['de', 'da', 'do', 'dos', 'das', 'e', 'a', 'o']);
+const mainWords = (name: string) =>
+  displayName(name)
+    .split(/[\s\-–—/.,()]+/)
+    .filter(w => w && !LINKING.has(w.toLowerCase()));
+
+/** Initials of the main words of a station name, at most 3 letters ("Marquês de Pombal" → "MP"). */
+export function initialsOf(name: string): string {
+  return mainWords(name).slice(0, 3).map(w => w[0]!.toUpperCase()).join('') || '?';
+}
+
+/**
+ * Initials for the visible single stations, unique among them (in priority order: the first keeps its plain
+ * initials). A clash is extended with the next letter of the last word used ("RA" → "RAT") when there is room,
+ * else numbered ("MP" → "MP2").
+ */
+export function uniqueInitials(names: readonly string[]): string[] {
+  const used = new Set<string>();
+  return names.map(name => {
+    const base = initialsOf(name);
+    const words = mainWords(name);
+    const candidates = [base];
+    const last = words[Math.min(words.length, 3) - 1];
+    if (base.length < 3 && last && last.length > 1) candidates.push(base + last[1]!.toUpperCase());
+    for (let k = 2; k < 100; k++) candidates.push(`${base}${k}`);
+    const pick = candidates.find(c => !used.has(c))!;
+    used.add(pick);
+    return pick;
+  });
+}

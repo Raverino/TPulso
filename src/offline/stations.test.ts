@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TransportMode } from '../../shared/types';
 import nearStops from '../../fixtures/stops.near-test-1500m.json';
 import { encodePolyline, type AreaFile, type PatternData } from '../../shared/timetable';
-import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, letterOrder, letterFor, shortLabel, type StationStop, type StopDirection, type StopKind } from './stations';
+import { clusterScreen, groupStations, normaliseName, spreadOffsets, stationSize, stopDirections, letterOrder, letterFor, shortLabel, initialsOf, uniqueInitials, type StationStop, type StopDirection, type StopKind } from './stations';
 
 // Real stops around Marquês de Pombal (fixture from the TML API).
 const bus = new Set<TransportMode>(['bus']);
@@ -182,5 +182,21 @@ describe('spreadOffsets', () => {
     expect(o).toHaveLength(6);
     expect(o[0]).toEqual({ dx: 0, dy: -38 });
     for (let i = 1; i < o.length; i++) expect(Math.hypot(o[i]!.dx - o[i - 1]!.dx, o[i]!.dy - o[i - 1]!.dy)).toBeGreaterThan(30);
+  });
+});
+
+describe('initials of single stations', () => {
+  it('takes the main words, skips linking words, at most 3 letters', () => {
+    expect(initialsOf('Marquês de Pombal')).toBe('MP');
+    expect(initialsOf('Marquês de Pombal (Metro) P1')).toBe('MPM');
+    expect(initialsOf('Cais do Sodré')).toBe('CS');
+    expect(initialsOf('Mq. Pombal - R. Joaquim A. Aguiar')).toBe('MPR');
+    expect(initialsOf('Rato')).toBe('R');
+  });
+  it('keeps badges unique: extend with a letter, else number', () => {
+    expect(uniqueInitials(['Rato', 'Restauradores', 'Rossio'])).toEqual(['R', 'RE', 'RO']);
+    expect(uniqueInitials(['Marquês de Pombal', 'Mercado Ponte', 'Marquês de Pombal'])).toEqual(['MP', 'MPO', 'MP2']);
+    const many = uniqueInitials(Array(5).fill('Saldanha'));
+    expect(new Set(many).size).toBe(5);
   });
 });

@@ -521,12 +521,20 @@
   border-radius: 9999px;
   background: oklch(0.16 0.025 258 / 0.85);
 }
-.station.is-selected .station-ring {
-  background: var(--radar);
+/* Selected (tapped, or picked in an expanded area point): the ring keeps its mode colour and the core stays
+   dark (no vehicle shows through); a light halo around it marks the selection. */
+.station.is-selected::before {
+  content: "";
+  position: absolute;
+  width: calc(var(--size) + 9px);
+  height: calc(var(--size) + 9px);
+  border-radius: 9999px;
+  border: 2px solid var(--radar);
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.5), 0 0 10px color-mix(in oklch, var(--radar) 45%, transparent);
+  pointer-events: none;
 }
 .station.is-selected .station-core {
-  background: var(--radar);
-  opacity: 0.35;
+  background: oklch(0.16 0.025 258);
 }
 /* TPulso: one short name (≤ 22 characters) shows only for the tapped marker and on hover (desktop), on the
    side toward the radar centre (StationLayer.placeLabels: .lab-above/-below/-left/-right). */

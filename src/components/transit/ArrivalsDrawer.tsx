@@ -71,6 +71,8 @@ export interface AreaRow {
   id: string;
   letter: string;
   name: string;
+  /** "Bus stop", "Metro station"… (from the lines serving it, not from the name). */
+  kindLabel: string;
   towards: string | null;
   modes: TransportMode[];
   distanceM: number;
@@ -79,6 +81,8 @@ export interface AreaRow {
 export interface StopPanel {
   id: string;
   name: string;
+  /** "Bus stop", "Metro station"… (from the lines serving it, not from the name). */
+  kindLabel?: string | undefined;
   /** Bus/tram platform: the main destination of the trips leaving it. */
   towards?: string | null;
   /** Bus/tram platform: the platform on the other side of the street. */
@@ -462,7 +466,9 @@ export default function ArrivalsDrawer({
  */
 function AreaList({ rows, pickedId, onPick, onClose }: { rows: AreaRow[]; pickedId: string | null; onPick?: ((id: string) => void) | undefined; onClose: (() => void) | undefined }) {
   const picked = useRef<HTMLLIElement | null>(null);
-  useEffect(() => picked.current?.scrollIntoView({ block: "nearest" }), [pickedId]);
+  useEffect(() => {
+    picked.current?.scrollIntoView({ block: "nearest" });
+  }, [pickedId]);
   return (
     <div className="flex h-full flex-col">
       <PanelHeader title={`Stations here · ${rows.length}`} icon={MapPin} onClose={onClose} />
@@ -489,7 +495,9 @@ function AreaList({ rows, pickedId, onPick, onClose }: { rows: AreaRow[]; picked
                     <span>{r.name}</span>
                   </div>
                   {r.towards && <div className="text-xs text-foreground/80 [overflow-wrap:anywhere]">towards {r.towards}</div>}
-                  <div className="text-[11px] text-muted-foreground">{r.distanceM} m away</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {r.kindLabel} · {r.distanceM} m away
+                  </div>
                   {on && (
                     <span className="mt-1 inline-block text-xs font-bold text-primary">Tap again for departures →</span>
                   )}
@@ -854,7 +862,10 @@ function StopDetails({
             {/* TPulso: a bus/tram platform is one direction: say which */}
             {s.towards && <span className="block text-sm font-semibold text-foreground/80">towards {s.towards}</span>}
           </div>
-          <div className="text-[11px] text-muted-foreground">{s.distanceM} m away · next 10 min</div>
+          <div className="text-[11px] text-muted-foreground">
+            {s.kindLabel ? `${s.kindLabel} · ` : ""}
+            {s.distanceM} m away · next 10 min
+          </div>
           {s.otherSide && onSelectStop && (
             <button
               type="button"

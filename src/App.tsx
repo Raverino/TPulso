@@ -35,6 +35,7 @@ import { activeTrips, departuresAtStop, expectedVehicles, isExpired, positionsAt
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
 import { clockNow, setSimClock, useClock } from "@/lib/clock";
+import { areaSelect, NO_SELECTION, pickedOf, type AreaSelection } from "@/lib/areaSelection";
 import { MODE_COLORS, MODE_TEXT } from "@/config";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
@@ -43,6 +44,8 @@ const region = LISBON;
 const RADII = region.radii as Radius[];
 /** Departures in the next 10 minutes, as in the original. */
 const WINDOW_MS = 600_000;
+/** What kind of stop a place is, from the lines serving it (bus stops are often named after a nearby metro). */
+const KIND_LABEL: Record<string, string> = { bus: "Bus stop", tram: "Tram stop", metro: "Metro station", train: "Train station", ferry: "Ferry pier" };
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
 
@@ -423,11 +426,13 @@ export default function App() {
   // TPulso: an expanded area point lists its stations in the side panel (letter, full name, direction,
   // distance). A first tap on a row or map letter picks the platform (highlighted on both); a second opens it.
   const [areaIds, setAreaIds] = useState<string[] | null>(null);
-  const [pickedId, setPickedId] = useState<string | null>(null);
+  // One state machine for the map letters and the list rows (src/lib/areaSelection.ts).
+  const [areaSel, setAreaSel] = useState<AreaSelection>(NO_SELECTION);
+  const pickedId = pickedOf(areaSel);
   const [areaCloseRequest, setAreaCloseRequest] = useState(0);
   const onArea = useCallback((ids: string[] | null) => {
     setAreaIds(ids);
-    setPickedId(null);
+    setAreaSel(NO_SELECTION);
     if (ids) {
       setSelectedId(null);
       setOpenId(null);
@@ -445,10 +450,12 @@ export default function App() {
       : members
           .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
           .sort((a, b) => a.expectedAt - b.expectedAt);
-    const distanceM = Math.round(Math.min(...members.map((m) => distanceMeters(center, m))));
+    // One distance everywhere: from the radar centre to the marker (the platform's position), as in the list.
+    const distanceM = Math.round(distanceMeters(center, tappedStation));
     return {
       id: tappedStation.id,
       name: tappedStation.name,
+      kindLabel: KIND_LABEL[members[0]?.dir?.kind ?? "bus"],
       towards: tappedStation.towards,
       otherSide: tappedStation.otherSide,
       distanceM,
@@ -462,11 +469,27 @@ export default function App() {
     const byId = new Map(allStations.map((st) => [st.id, st]));
     return areaIds.flatMap((id, i) => {
       const st = byId.get(id);
+      const kind = allStops.find((s) => s.id === st?.stopIds[0])?.dir?.kind ?? "bus";
       return st
-        ? [{ id, letter: letterFor(i), name: st.name, towards: st.towards, modes: st.modes, distanceM: Math.round(distanceMeters(center, st)) }]
+        ? [{ id, letter: letterFor(i), name: st.name, kindLabel: KIND_LABEL[kind]!, towards: st.towards, modes: st.modes, distanceM: Math.round(distanceMeters(center, st)) }]
         : [];
     });
-  }, [areaIds, allStations, center]);
+  }, [areaIds, allStations, allStops, center]);
+  const openStop = useCallback((id: string) => {
+    setSelectedId(null);
+    setOpenId(null);
+    setSelectedStopId(id);
+    setPanelView("stop");
+  }, []);
+  // A tap on a map letter or a list row: pick it; a second tap opens its departures (its panel).
+  const tapPlatform = useCallback(
+    (id: string) => {
+      const next = areaSelect(areaSel, { type: "tap", id });
+      setAreaSel(next);
+      if (next.kind === "departures") openStop(id);
+    },
+    [areaSel, openStop],
+  );
   const selectStop = useCallback(
     (id: string) => {
       setSelectedId(null);
@@ -887,7 +910,7 @@ export default function App() {
                 selectedStopId={panelView === "stop" ? selectedStopId : null}
                 recenterRequest={recenterRequest}
                 pickedId={pickedId}
-                onPick={setPickedId}
+                onPick={tapPlatform}
                 onArea={onArea}
                 areaCloseRequest={areaCloseRequest}
                 baseLines={baseLines}
@@ -990,7 +1013,7 @@ export default function App() {
           }}
           area={areaRows}
           pickedId={pickedId}
-          onPickRow={(id) => (pickedId === id ? selectStop(id) : setPickedId(id))}
+          onPickRow={tapPlatform}
           now={now}
           boardAgeSec={0}
           boardStatus={{

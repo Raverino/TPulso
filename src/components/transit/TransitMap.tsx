@@ -18,7 +18,7 @@ import {
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES, MODE_COLORS } from "@/config";
-import { clusterScreen, letterFor, letterOrder, shortLabel, spreadOffsets } from "@/offline/stations";
+import { clusterScreen, initialsOf, letterFor, letterOrder, shortLabel, spreadOffsets, uniqueInitials } from "@/offline/stations";
 import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
@@ -71,13 +71,14 @@ const DIR_CHIP = `<svg viewBox="0 0 10 10" width="10" height="10"><path d="M5 1 
  * Ring split into one segment per mode; the icon box stays >= 28 px so it is easy to tap.
  * - `selected` (tapped, or picked in an expanded area point): highlighted; a platform also shows its direction
  *   as a small chip with an arrow (it turns with the map: --bearing).
- * - `letter`: a station of an expanded area point carries a letter badge (A, B…) instead of a name.
- * - Otherwise the short name (≤ 22 characters) is in the icon, shown only when tapped or hovered (desktop),
- *   on the side toward the radar's centre (StationLayer.placeLabels).
+ * - `badge`: a small badge — the letter (A, B…) of a station in an expanded area point, or the initials of a
+ *   single station (unique within the radar).
+ * - `withLabel`: the short name (≤ 22 characters) is in the icon, shown only when tapped or hovered (desktop),
+ *   on the side toward the radar's centre (StationLayer.placeLabels). Expanded stations have none (the list).
  */
-function stationIcon(s: MapStation, selected: boolean, letter?: string) {
+function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel = true) {
   const heading = selected && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
-  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${letter ?? ""}`;
+  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${badge ?? ""}|${withLabel ? 1 : 0}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
   const n = Math.max(1, s.modes.length);
@@ -86,7 +87,9 @@ function stationIcon(s: MapStation, selected: boolean, letter?: string) {
     : MODE_VAR[s.modes[0] ?? "bus"];
   const box = Math.max(28, s.size + 4);
   const dir = heading !== null ? `<span class="station-dir" style="--heading:${heading}deg" aria-hidden="true">${DIR_CHIP}</span>` : "";
-  const tag = letter ? `<span class="station-letter">${esc(letter)}</span>` : `<span class="station-label lab-above">${esc(shortLabel(s.name))}</span>`;
+  const tag =
+    (badge ? `<span class="station-letter">${esc(badge)}</span>` : "") +
+    (withLabel ? `<span class="station-label lab-above">${esc(shortLabel(s.name))}</span>` : "");
   const icon = L.divIcon({
     className: "",
     iconSize: [box, box],
@@ -104,7 +107,7 @@ const spreadIconCache = new Map<string, L.DivIcon>();
  * (after a pan or a turn of the map) only moves the marker and never replays the animation.
  */
 function spreadStationIcon(s: MapStation, dx: number, dy: number, closing: boolean, letter: string, picked: boolean) {
-  const base = stationIcon(s, picked, letter);
+  const base = stationIcon(s, picked, letter, false);
   const key = `${(base.options.html as string).length}|${base.options.html as string}|${dx}|${dy}|${closing ? 1 : 0}`;
   const hit = spreadIconCache.get(key);
   if (hit) return hit;
@@ -241,7 +244,10 @@ const StationLayer = memo(function StationLayer({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const collapse = useCallback((animate: boolean) => {
     clearTimeout(closeTimer.current);
-    if (!animate || reducedMotion()) return setSpread(null);
+    if (!animate || reducedMotion()) {
+      setSpread(null);
+      return;
+    }
     setSpread((cur) => (cur && !cur.closing ? { ...cur, closing: true } : cur));
     closeTimer.current = setTimeout(() => setSpread(null), SPREAD_MS);
   }, []);
@@ -255,7 +261,9 @@ const StationLayer = memo(function StationLayer({
     zoomend: () => setZoom(map.getZoom()),
     click: () => collapse(true), // background tap: animate back in
   });
-  useEffect(() => collapse(false), [collapseKey, collapse]);
+  useEffect(() => {
+    collapse(false);
+  }, [collapseKey, collapse]);
   // Lay the spread out again after a pan or a turn of the map (at most once per frame while turning).
   const [layoutTick, setLayoutTick] = useState(0);
   useEffect(() => {
@@ -355,11 +363,26 @@ const StationLayer = memo(function StationLayer({
     return clusterScreen(pts);
   }, [stations, zoom, map]);
 
+  // Initials badges of the single (non-expanded) markers, unique within the radar: busiest first keep theirs.
+  const badges = useMemo(() => {
+    const singles: { key: string; name: string; weight: number }[] = [];
+    for (const c of clusters) {
+      const members = c.members.map((id) => byId.get(id)).filter((m): m is MapStation => !!m);
+      if (!members.length) continue;
+      if (members.length === 1 || new Set(members.map((m) => m.name)).size === 1) {
+        singles.push({ key: members.length === 1 ? members[0]!.id : c.members.join(","), name: members[0]!.name, weight: members.reduce((n, m) => n + m.departures, 0) });
+      }
+    }
+    singles.sort((a, b) => b.weight - a.weight || a.key.localeCompare(b.key));
+    const ini = uniqueInitials(singles.map((x) => x.name));
+    return new Map(singles.map((x, i) => [x.key, ini[i]!]));
+  }, [clusters, byId]);
+
   // Station focus: only the tapped station.
   if (selectedStopId) {
     const s = byId.get(selectedStopId);
     return s ? (
-      <Marker position={[s.lat, s.lng]} icon={stationIcon(s, true)} zIndexOffset={800} eventHandlers={{ click: () => onSelectStop(s.id) }} />
+      <Marker position={[s.lat, s.lng]} icon={stationIcon(s, true, badges.get(s.id) ?? initialsOf(s.name))} zIndexOffset={800} eventHandlers={{ click: () => onSelectStop(s.id) }} />
     ) : null;
   }
   return (
@@ -369,7 +392,7 @@ const StationLayer = memo(function StationLayer({
         if (members.length === 1) {
           const s = members[0]!;
           return (
-            <Marker key={s.id} position={[s.lat, s.lng]} icon={stationIcon(s, false)} riseOnHover eventHandlers={{ click: () => onSelectStop(s.id), ...hoverHandlers }} />
+            <Marker key={s.id} position={[s.lat, s.lng]} icon={stationIcon(s, false, badges.get(s.id))} riseOnHover eventHandlers={{ click: () => onSelectStop(s.id), ...hoverHandlers }} />
           );
         }
         const key = c.members.join(",");
@@ -382,7 +405,7 @@ const StationLayer = memo(function StationLayer({
             const first = members[0]!;
             const ring: MapStation = { ...first, modes, kind: "station", heading: null, size: Math.max(...members.map((s) => s.size)) };
             return (
-              <Marker key={`place-${key}`} position={centre} icon={stationIcon(ring, false)} riseOnHover zIndexOffset={100} eventHandlers={{ click: () => expand(key), ...hoverHandlers }} />
+              <Marker key={`place-${key}`} position={centre} icon={stationIcon(ring, false, badges.get(key))} riseOnHover zIndexOffset={100} eventHandlers={{ click: () => expand(key), ...hoverHandlers }} />
             );
           }
           return (
@@ -426,7 +449,7 @@ const StationLayer = memo(function StationLayer({
                     position={pos}
                     icon={spreadStationIcon(s, dx, dy, closing, letterFor(i), picked)}
                     zIndexOffset={picked ? 3500 : 3000}
-                    eventHandlers={{ click: () => (picked ? onSelectStop(s.id) : onPick(s.id)) }}
+                    eventHandlers={{ click: () => onPick(s.id) }}
                   />
                 </Fragment>
               );
