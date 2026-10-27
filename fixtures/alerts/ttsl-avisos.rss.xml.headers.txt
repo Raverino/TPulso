@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+Date: Tue, 27 Oct 2026 22:18:19 GMT
+Server: Apache/2
+Last-Modified: Tue, 27 Oct 2026 07:00:13 GMT
+ETag: "500bc9ab8f59834f38366091eb72ce02"
+Link: <https://ttsl.pt/wp-json/>; rel="https://api.w.org/"
+Vary: Accept-Encoding
+Transfer-Encoding: chunked
+Content-Type: application/rss+xml; charset=UTF-8
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+

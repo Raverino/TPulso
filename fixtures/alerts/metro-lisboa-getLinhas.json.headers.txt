@@ -1,0 +1,25 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Tue, 27 Oct 2026 22:18:19 GMT
+Content-Type: text/html; charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Powered-By: PHP/8.2.35
+X-Content-Type-Options: nosniff
+Vary: Accept-Encoding
+Cache-Control: must-revalidate, max-age=86400
+Expires: Wed, 28 Oct 2026 22:18:18 GMT
+X-Frame-Options: SAMEORIGIN
+X-XSS-Protection: 1; mode=block
+X-Download-Options: noopen
+X-DNS-Prefetch-Control: on
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+Content-Security-Policy: frame-ancestors 'self' https://www.metrolisboa.pt/
+Referrer-Policy: strict-origin-when-cross-origin
+Expect-CT: max-age=7776000, enforce, report-uri="https://www.metrolisboa.pt/report"
+Feature-Policy: vibrate 'none'
+Permissions-Policy: geolocation=(self), microphone=()
+X-XSS-Protection: 1; mode=block
+X-Permitted-Cross-Domain-Policies: none
+X-Powered-By: PleskLin
+
