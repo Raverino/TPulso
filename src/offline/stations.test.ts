@@ -19,10 +19,10 @@ describe('normaliseName', () => {
 });
 
 // A direction for a synthetic stop: heading in degrees, trips per destination.
-const dir = (kind: StopKind, heading: number | null, dests: Record<string, number> = {}): StopDirection => {
+const dir = (kind: StopKind, heading: number | null, dests: Record<string, number> = {}, modes: StopKind[] = [kind]): StopDirection => {
   const w = Object.values(dests).reduce((s, x) => s + x, 0) || 1;
   const h = ((heading ?? 0) * Math.PI) / 180;
-  return { kind, x: heading === null ? 0 : Math.sin(h) * w, y: heading === null ? 0 : Math.cos(h) * w, weight: heading === null ? 0 : w, dests: new Map(Object.entries(dests)) };
+  return { kind, modes, x: heading === null ? 0 : Math.sin(h) * w, y: heading === null ? 0 : Math.cos(h) * w, weight: heading === null ? 0 : w, dests: new Map(Object.entries(dests)) };
 };
 const at = (id: string, name: string, lat: number, lng: number, d?: StopDirection, modes: TransportMode[] = ['bus']): StationStop =>
   ({ id, name, lat, lng, modes: new Set(modes), dir: d });
@@ -83,6 +83,24 @@ describe('groupStations', () => {
     ]);
     expect(st).toHaveLength(1);
     expect(st[0]).toMatchObject({ kind: 'station', heading: null, stopIds: ['m1', 'm2'] });
+  });
+
+  it('Jardim Amoreiras: a real tram + bus stop stays with its tram + bus opposite stop, never with a bus-only stop', () => {
+    // Real ids and positions (Carris: tram 24E, buses 713 and 774 share both stops; 14 m apart).
+    const tb: StopKind[] = ['tram', 'bus'];
+    const st = groupStations([
+      at('457708', 'Jardim Amoreiras', 38.721519, -9.156536, dir('tram', 30, { 'Pç. Luis Camões (B. Alto)': 78, 'Estação Campolide': 83 }, tb), ['tram', 'bus']),
+      at('773217', 'Jardim Amoreiras', 38.721474, -9.156381, dir('tram', 210, { Campolide: 77, 'Campo Ourique (Prazeres)': 74 }, tb), ['tram', 'bus']),
+      // a bus-only stop 10 m away (hypothetical): must not join the tram + bus place
+      at('b1', 'Jardim Amoreiras', 38.721519, -9.156536 + east(10), dir('bus', 30), ['bus']),
+    ]);
+    const jt = st.filter(x => x.stopIds.some(id => id === '457708' || id === '773217'));
+    expect(jt).toHaveLength(2); // one place, split by direction
+    for (const p of jt) {
+      expect(p.modes).toEqual(['bus', 'tram']); // the ring shows both colours
+      expect(p.stopIds).not.toContain('b1');
+    }
+    expect(st.find(x => x.stopIds.includes('b1'))!.stopIds).toEqual(['b1']);
   });
 
   it('never merges across modes, even with the same name and 10 m apart', () => {

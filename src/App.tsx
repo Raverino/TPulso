@@ -7,7 +7,8 @@ import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFro
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
 import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
-import { groupStations, letterFor, stationSize, stopDirections } from "@/offline/stations";
+import { groupStations, letterFor, stationSize, stopDirections, type StopKind } from "@/offline/stations";
+import { filterByMode, stopKindLabel } from "@/offline/modeFilter";
 import {
   clockSec,
   distanceMeters,
@@ -44,8 +45,10 @@ const region = LISBON;
 const RADII = region.radii as Radius[];
 /** Departures in the next 10 minutes, as in the original. */
 const WINDOW_MS = 600_000;
-/** What kind of stop a place is, from the lines serving it (bus stops are often named after a nearby metro). */
-const KIND_LABEL: Record<string, string> = { bus: "Bus stop", tram: "Tram stop", metro: "Metro station", train: "Train station", ferry: "Ferry pier" };
+/** What kind of stop a place is, from every line serving it (bus stops are often named after a nearby metro;
+ * a Carris stop can serve trams and buses): "Tram and bus stop". */
+const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | undefined }[]) =>
+  stopKindLabel([...new Set(members.flatMap((m) => m.dir?.modes ?? ["bus" as const]))]);
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
 
@@ -445,17 +448,19 @@ export default function App() {
     if (!tappedStation || !manifest) return null;
     const ids = new Set(tappedStation.stopIds);
     const members = allStops.filter((s) => ids.has(s.id));
+    // The mode filter applies here too: a tram + bus stop under "Tram/Metro" lists only its trams.
     const rows = expired
       ? []
-      : members
-          .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
-          .sort((a, b) => a.expectedAt - b.expectedAt);
+      : filterByMode(
+          members.flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m))),
+          filter,
+        ).sort((a, b) => a.expectedAt - b.expectedAt);
     // One distance everywhere: from the radar centre to the marker (the platform's position), as in the list.
     const distanceM = Math.round(distanceMeters(center, tappedStation));
     return {
       id: tappedStation.id,
       name: tappedStation.name,
-      kindLabel: KIND_LABEL[members[0]?.dir?.kind ?? "bus"],
+      kindLabel: kindLabelOf(members),
       towards: tappedStation.towards,
       otherSide: tappedStation.otherSide,
       distanceM,
@@ -463,27 +468,28 @@ export default function App() {
       fetchedAt: now,
       error: null,
     };
-  }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive]);
+  }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive, filter]);
   // The picked platform's next departures, shown in its expanded row of the station list.
   const pickedDepartures: LiveDeparture[] | null = useMemo(() => {
     if (!pickedId || !manifest) return null;
     const st = allStations.find((x) => x.id === pickedId);
     if (!st || expired) return [];
     const ids = new Set(st.stopIds);
-    return allStops
-      .filter((s) => ids.has(s.id))
-      .flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m)))
+    return filterByMode(
+      allStops.filter((s) => ids.has(s.id)).flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m))),
+      filter,
+    )
       .sort((a, b) => a.expectedAt - b.expectedAt)
       .slice(0, 4);
-  }, [pickedId, allStations, allStops, manifest, expired, tt.areas, now, toLive]);
+  }, [pickedId, allStations, allStops, manifest, expired, tt.areas, now, toLive, filter]);
   const areaRows = useMemo(() => {
     if (!areaIds) return null;
     const byId = new Map(allStations.map((st) => [st.id, st]));
     return areaIds.flatMap((id, i) => {
       const st = byId.get(id);
-      const kind = allStops.find((s) => s.id === st?.stopIds[0])?.dir?.kind ?? "bus";
+      const members = st ? allStops.filter((s) => st.stopIds.includes(s.id)) : [];
       return st
-        ? [{ id, letter: letterFor(i), name: st.name, kindLabel: KIND_LABEL[kind]!, towards: st.towards, modes: st.modes, distanceM: Math.round(distanceMeters(center, st)) }]
+        ? [{ id, letter: letterFor(i), name: st.name, kindLabel: kindLabelOf(members), towards: st.towards, modes: st.modes, distanceM: Math.round(distanceMeters(center, st)) }]
         : [];
     });
   }, [areaIds, allStations, allStops, center]);

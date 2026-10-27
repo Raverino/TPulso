@@ -1,6 +1,7 @@
 // Stops on the map (docs/OFFLINE.md). The individual stop IDs are kept (for departures and vehicle filtering)
 // and never shown.
-// - A *place* is the stops of one mode within 40 m of each other (metro, train and ferry: one station). It has
+// - A *place* is the stops with the same set of modes within 40 m of each other (metro, train and ferry: one
+//   station; a tram + bus stop never joins a bus-only stop). It has
 //   one name: the most common stop name in the group (a tie goes to the shortest); other spellings are not shown.
 // - A bus/tram place whose stops serve opposite directions is split into one marker per direction (*platforms*),
 //   all with the place name; each knows its "other side". A place with one direction stays one marker.
@@ -16,7 +17,10 @@ const DIRECTIONAL: ReadonlySet<StopKind> = new Set(['bus', 'tram']);
 
 /** Direction of travel at a stop, from the trips that serve it (see stopDirections). */
 export interface StopDirection {
+  /** The main kind (for grouping rules): metro, train, ferry, then tram, then bus. */
   kind: StopKind;
+  /** Every kind serving the stop, in a fixed order (e.g. ['tram', 'bus'] at a shared Carris stop). */
+  modes: readonly StopKind[];
   /** Sum of unit vectors of the heading just after the stop (x = east, y = north), weighted by trips. */
   x: number;
   y: number;
@@ -125,8 +129,9 @@ export function stopDirections(areas: readonly AreaFile[], metroOperators: reado
   const out = new Map<string, StopDirection>();
   for (const [id, e] of acc) {
     // One kind per stop: the merged kinds win (a metro stop stays a metro stop), then tram over bus.
-    const kind = (['metro', 'train', 'ferry', 'tram', 'bus'] as const).find(k => e.kinds.has(k))!;
-    out.set(id, { kind, x: e.x, y: e.y, weight: e.weight, dests: e.dests });
+    const order = ['metro', 'train', 'ferry', 'tram', 'bus'] as const;
+    const kind = order.find(k => e.kinds.has(k))!;
+    out.set(id, { kind, modes: order.filter(k => e.kinds.has(k)), x: e.x, y: e.y, weight: e.weight, dests: e.dests });
   }
   return out;
 }
@@ -159,9 +164,11 @@ function mostCommon(counts: Map<string, number>): string | null {
 
 export function groupStations(stops: readonly StationStop[]): Station[] {
   const kindOf = (s: StationStop): StopKind => s.dir?.kind ?? 'bus';
+  /** The set of modes serving a stop: places only group stops whose sets match. */
+  const modesOf = (s: StationStop): string => s.dir?.modes.join('+') ?? 'bus';
   const headingOfStop = (s: StationStop) => (s.dir ? headingOf(s.dir.x, s.dir.y, s.dir.weight) : null);
 
-  // 1. Places: stops of the same kind within 40 m (chained). A grid of ~50 m cells limits the pairs compared.
+  // 1. Places: stops with the same mode set within 40 m (chained). A grid of ~50 m cells limits the pairs compared.
   const uf = unionFind(stops.length);
   const grid = new Map<string, number[]>();
   const cellOf = (s: StationStop) => [Math.floor(s.lat / 0.00045), Math.floor(s.lng / 0.00057)] as const;
@@ -177,7 +184,7 @@ export function groupStations(stops: readonly StationStop[]): Station[] {
     for (let di = -1; di <= 1; di++) {
       for (let dj = -1; dj <= 1; dj++) {
         for (const j of grid.get(`${ci + di}|${cj + dj}`) ?? []) {
-          if (j > i && kindOf(stops[j]!) === kindOf(a) && distanceMeters(a, stops[j]!) <= PLACE_MERGE_M) uf.join(i, j);
+          if (j > i && modesOf(stops[j]!) === modesOf(a) && distanceMeters(a, stops[j]!) <= PLACE_MERGE_M) uf.join(i, j);
         }
       }
     }
