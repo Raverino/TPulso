@@ -1,8 +1,10 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import L from "leaflet";
 // TPulso: map rotation (compass). leafletGlobal must come first: the plugin patches the global L.
 import "@/lib/leafletGlobal";
 import "leaflet-rotate";
+import "@/lib/leafletRotateSetup";
+import { GLIDE_MIN_V, glideStep, normDeg, pointerAngle, releaseVelocity, settleBearing, type BearingSample } from "@/lib/rotation";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -284,10 +286,10 @@ const StationLayer = memo(function StationLayer({
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => setLayoutTick((n) => n + 1));
     };
-    map.on("rotate moveend", relayout);
+    map.on("rotateend moveend", relayout);
     return () => {
       cancelAnimationFrame(raf);
-      map.off("rotate moveend", relayout);
+      map.off("rotateend moveend", relayout);
     };
   }, [map]);
   // While spread: vehicles and route lines fade to 25 % (CSS on the map container, transition 0.5 s).
@@ -349,12 +351,15 @@ const StationLayer = memo(function StationLayer({
     },
     [map],
   );
-  useLayoutEffect(() => {
-    placeLabels();
+  // On the next frame: react-leaflet adds a newly tapped (focus) marker in its own effects, which may run
+  // after this one (and twice in development).
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => placeLabels());
     const again = () => placeLabels();
-    map.on("moveend zoomend rotate resize", again);
+    map.on("moveend zoomend rotateend resize", again);
     return () => {
-      map.off("moveend zoomend rotate resize", again);
+      cancelAnimationFrame(raf);
+      map.off("moveend zoomend rotateend resize", again);
     };
   }, [map, placeLabels, selectedStopId, stations]);
   const hoverHandlers = useMemo(
@@ -749,6 +754,8 @@ function MapController({
     // Reported when a move ends (not on every frame of a drag or pinch): the radar contents, stations and
     // clusters are recomputed once the map stops.
     map.on("moveend", report);
+    map.on("rotatestart", cancel); // turning the map: no return to the user meanwhile
+    map.on("rotateend", moveEnd);
     map.on("dragstart drag", byHand);
     map.on("zoomstart", pinch);
     map.on("moveend zoomend", moveEnd);
@@ -764,6 +771,8 @@ function MapController({
     return () => {
       cancel();
       map.off("moveend", report);
+      map.off("rotatestart", cancel);
+      map.off("rotateend", moveEnd);
       map.off("dragstart drag", byHand);
       map.off("zoomstart", pinch);
       map.off("moveend zoomend", moveEnd);
@@ -851,12 +860,10 @@ function SonarGeometry({
   radius,
   disc,
   root,
-  steer,
 }: {
   radius: number;
   disc: RefObject<HTMLDivElement | null>;
   root: RefObject<HTMLDivElement | null>;
-  steer: RefObject<SVGCircleElement | null>;
 }) {
   const map = useMap();
   useEffect(() => {
@@ -877,13 +884,6 @@ function SonarGeometry({
         el.style.setProperty("--y", `${y}px`);
         el.style.setProperty("--r", `${r}px`);
       }
-      // The steering band: centred 14 px outside the rim (44 px wide: from 8 px inside the circle to the bezel).
-      const st = steer.current;
-      if (st) {
-        st.setAttribute("cx", String(x));
-        st.setAttribute("cy", String(y));
-        st.setAttribute("r", String(r + 14));
-      }
     };
     update();
     // Only zoom, resize and the end of a move change it — never every frame of a move.
@@ -891,78 +891,233 @@ function SonarGeometry({
     return () => {
       map.off("zoom zoomanim resize viewreset moveend", update);
     };
-  }, [map, radius, disc, root, steer]);
+  }, [map, radius, disc, root]);
   return null;
 }
 
-/** Angle difference folded into -180..180 degrees. */
-const normDeg = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
 /** Rotation is ignored until two fingers have turned this far (so a pinch does not wobble the map). */
 const TWIST_DEAD_ZONE_DEG = 12;
+/** The ring band a finger can turn the map with: from 6 px inside the rim to 38 px outside it (≥ 44 px). */
+const RING_IN_PX = 6;
+const RING_OUT_PX = 38;
 
 /**
- * TPulso: compass on the radar ring. N/E/S/W turn with the map (N highlighted); markers and labels stay
- * upright (leaflet-rotate). Rotate by dragging along the ring, or with a two-finger twist on the map; one finger
- * inside the circle still pans. Tapping N turns the map back to north (0.3 s).
+ * TPulso: compass on the radar ring, and turning the map.
+ * - N/E/S/W turn with the map (N highlighted, tap: back to north in 0.3 s); a grip on the ring shows where to
+ *   grab it; a live bearing readout ("45°") shows while turning and fades out after.
+ * - Turn by dragging along the ring (the angle of the finger around the circle centre: the map follows the
+ *   finger exactly) or with a two-finger twist; one finger inside the circle still pans.
+ * - One requestAnimationFrame loop applies the angle (kept in a ref; no React state while turning). The map
+ *   fires 'rotatestart' / 'rotateend' (the recentre timer and the station layout wait for the end).
+ * - After release: a short glide with a natural decay (none with reduced motion), then a soft snap to north
+ *   within 5°.
+ * Markers stay upright through one CSS variable (--bearing) on the marker pane (src/lib/leafletRotateSetup.ts).
  */
-function Compass({ map, root, steer }: { map: L.Map | null; root: RefObject<HTMLDivElement | null>; steer: RefObject<SVGCircleElement | null> }) {
-  const anim = useRef(0);
-  // The ring follows the map's rotation (CSS var on the root; the bezel ticks and the letters use it).
+function Compass({ map, root }: { map: L.Map | null; root: RefObject<HTMLDivElement | null> }) {
+  const compassRef = useRef<HTMLDivElement>(null);
+  const readoutRef = useRef<HTMLDivElement>(null);
+  const turning = useRef({
+    raf: 0,
+    anim: 0,
+    pending: null as number | null,
+    cur: 0,
+    samples: [] as BearingSample[],
+    active: false,
+    hide: undefined as ReturnType<typeof setTimeout> | undefined,
+  });
+
+  // --bearing on the three places that use it (marker pane, compass, ring ticks) — not on the whole map.
   useEffect(() => {
     if (!map) return;
-    const set = () => root.current?.style.setProperty("--bearing", `${map.getBearing()}deg`);
+    const targets = [map.getPane("markerPane"), compassRef.current, root.current?.querySelector<HTMLElement>(".sonar-ticks")];
+    const set = () => {
+      const v = `${map.getBearing()}deg`;
+      for (const el of targets) el?.style.setProperty("--bearing", v);
+    };
     set();
     map.on("rotate", set);
     return () => {
       map.off("rotate", set);
     };
   }, [map, root]);
-  // Steering: drag along the ring.
+
+  // The resetNorth handler needs the same machinery: kept in a ref filled by the effect below.
+  const api = useRef<{ toNorth: () => void } | null>(null);
+
   useEffect(() => {
-    const c = steer.current;
-    if (!map || !c) return;
-    let start: { a: number; b: number; id: number } | null = null;
-    const angle = (e: PointerEvent) => {
-      const box = root.current!.getBoundingClientRect();
-      const size = map.getSize();
-      return (Math.atan2(e.clientY - box.top - size.y / 2, e.clientX - box.left - size.x / 2) * 180) / Math.PI;
+    const el = root.current;
+    if (!map || !el) return;
+    const s = turning.current;
+    s.cur = map.getBearing();
+    const geom = () => {
+      const cs = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return { cx: box.left + parseFloat(cs.getPropertyValue("--x")), cy: box.top + parseFloat(cs.getPropertyValue("--y")), r: parseFloat(cs.getPropertyValue("--r")) };
     };
+    const showReadout = (b: number) => {
+      const o = readoutRef.current;
+      if (!o) return;
+      o.textContent = `${Math.round(((b % 360) + 360) % 360) % 360}°`;
+      o.classList.add("is-on");
+      clearTimeout(s.hide);
+    };
+    const apply = (b: number) => {
+      s.cur = b;
+      map.setBearing(b);
+      showReadout(b);
+    };
+    // The loop: at most one setBearing per frame, with the latest angle.
+    const frame = () => {
+      s.raf = 0;
+      if (s.pending === null) return;
+      const b = s.pending;
+      s.pending = null;
+      apply(b);
+    };
+    const request = (b: number) => {
+      s.pending = b;
+      s.samples.push({ t: performance.now(), b });
+      while (s.samples.length > 2 && performance.now() - s.samples[0]!.t > 250) s.samples.shift();
+      if (!s.raf) s.raf = requestAnimationFrame(frame);
+    };
+    const flush = () => {
+      cancelAnimationFrame(s.raf);
+      s.raf = 0;
+      if (s.pending !== null) frame();
+    };
+    const begin = () => {
+      cancelAnimationFrame(s.anim);
+      s.cur = map.getBearing();
+      s.samples = [];
+      if (!s.active) {
+        s.active = true;
+        map.fire("rotatestart");
+      }
+    };
+    const finish = () => {
+      if (!s.active) return;
+      s.active = false;
+      map.fire("rotateend");
+      s.hide = setTimeout(() => readoutRef.current?.classList.remove("is-on"), 700);
+    };
+    const animateTo = (to: number, ms: number, done: () => void) => {
+      const from = s.cur;
+      if (ms <= 0 || from === to) {
+        apply(to);
+        return done();
+      }
+      const t0 = performance.now();
+      const step = (t: number) => {
+        const k = Math.min(1, (t - t0) / ms);
+        apply(from + (to - from) * (1 - (1 - k) ** 3)); // ease-out
+        if (k < 1) s.anim = requestAnimationFrame(step);
+        else done();
+      };
+      s.anim = requestAnimationFrame(step);
+    };
+    const settle = () => animateTo(settleBearing(s.cur), reducedMotion() ? 0 : 220, finish);
+    const release = () => {
+      flush();
+      const v = releaseVelocity(s.samples, performance.now());
+      if (reducedMotion() || Math.abs(v) < GLIDE_MIN_V) return settle();
+      let vel = v;
+      let last = performance.now();
+      const glide = (t: number) => {
+        const g = glideStep(vel, Math.min(50, t - last));
+        last = t;
+        vel = g.v;
+        apply(s.cur + g.delta);
+        if (Math.abs(vel) > GLIDE_MIN_V) s.anim = requestAnimationFrame(glide);
+        else settle();
+      };
+      s.anim = requestAnimationFrame(glide);
+    };
+    api.current = {
+      toNorth: () => {
+        begin();
+        animateTo(s.cur - normDeg(s.cur), reducedMotion() ? 0 : 300, finish);
+      },
+    };
+
+    // Ring drag: caught before the map sees it (capture), only inside the ring band and never on a button.
+    const inBand = (x: number, y: number) => {
+      const g = geom();
+      const d = Math.hypot(x - g.cx, y - g.cy);
+      return g.r > 0 && d >= g.r - RING_IN_PX && d <= g.r + RING_OUT_PX;
+    };
+    // Buttons on the ring keep working, except N: a press on N that moves turns the map like the ring; a
+    // press that stays put is a tap (back to north).
+    const onNorth = (t: EventTarget | null) => !!(t as Element | null)?.closest?.(".compass-letter.is-north");
+    // Map markers are not ring controls (Leaflet gives interactive markers role="button"): a vehicle hidden
+    // under the bezel must not block the ring.
+    const onControl = (t: EventTarget | null) => {
+      const el = t as Element | null;
+      return !onNorth(t) && !el?.closest?.(".leaflet-pane") && !!el?.closest?.("button, a, [role='button']");
+    };
+    let drag: { id: number; last: number; total: number; b0: number; x: number; y: number; north: boolean; moved: boolean } | null = null;
     const down = (e: PointerEvent) => {
-      cancelAnimationFrame(anim.current);
-      start = { a: angle(e), b: map.getBearing(), id: e.pointerId };
-      c.setPointerCapture(e.pointerId);
+      if (!e.isPrimary || onControl(e.target) || !inBand(e.clientX, e.clientY)) return;
+      e.stopPropagation();
       e.preventDefault();
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* a pointer that cannot be captured still turns the map while it stays over the radar */
+      }
+      begin();
+      const g = geom();
+      drag = { id: e.pointerId, last: pointerAngle(g.cx, g.cy, e.clientX, e.clientY), total: 0, b0: s.cur, x: e.clientX, y: e.clientY, north: onNorth(e.target), moved: false };
+      el.classList.add("is-steering");
     };
     const move = (e: PointerEvent) => {
-      if (start && e.pointerId === start.id) map.setBearing(start.b + normDeg(angle(e) - start.a));
+      if (!drag) {
+        // Desktop: a grab cursor over the ring band.
+        if (e.pointerType === "mouse" && !e.buttons) el.classList.toggle("ring-hover", inBand(e.clientX, e.clientY) && !onControl(e.target));
+        return;
+      }
+      if (e.pointerId !== drag.id) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return; // still a tap
+      drag.moved = true;
+      const g = geom();
+      const a = pointerAngle(g.cx, g.cy, e.clientX, e.clientY);
+      drag.total += normDeg(a - drag.last); // unwrapped: the map follows the finger round and round
+      drag.last = a;
+      request(drag.b0 + drag.total);
     };
     const up = (e: PointerEvent) => {
-      if (start?.id === e.pointerId) start = null;
+      if (!drag || e.pointerId !== drag.id) return;
+      const tapNorth = drag.north && !drag.moved;
+      drag = null;
+      el.classList.remove("is-steering");
+      if (tapNorth) api.current?.toNorth();
+      else release();
     };
-    c.addEventListener("pointerdown", down);
-    c.addEventListener("pointermove", move);
-    c.addEventListener("pointerup", up);
-    c.addEventListener("pointercancel", up);
-    return () => {
-      c.removeEventListener("pointerdown", down);
-      c.removeEventListener("pointermove", move);
-      c.removeEventListener("pointerup", up);
-      c.removeEventListener("pointercancel", up);
+    // Leaflet starts its own drag on touchstart / mousedown: stop those too inside the band.
+    const block = (e: TouchEvent | MouseEvent) => {
+      const p = "touches" in e ? e.touches[0] : e;
+      if (!p || ("touches" in e && e.touches.length > 1) || onControl(e.target) || !inBand(p.clientX, p.clientY)) return;
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
     };
-  }, [map, root, steer]);
-  // Two-finger twist on the map (the pinch zoom keeps working alongside).
-  useEffect(() => {
-    if (!map) return;
-    const el = map.getContainer();
-    let t: { a: number; b: number; on: boolean } | null = null;
+    el.addEventListener("pointerdown", down, true);
+    el.addEventListener("pointermove", move, true);
+    el.addEventListener("pointerup", up, true);
+    el.addEventListener("pointercancel", up, true);
+    el.addEventListener("touchstart", block, { capture: true, passive: false });
+    el.addEventListener("mousedown", block, true);
+
+    // Two-finger twist on the map (the pinch zoom keeps working alongside).
+    const mapEl = map.getContainer();
+    let t: { a: number; b0: number; on: boolean } | null = null;
     const ang = (e: TouchEvent) => {
       const p = e.touches[0]!, q = e.touches[1]!;
-      return (Math.atan2(q.clientY - p.clientY, q.clientX - p.clientX) * 180) / Math.PI;
+      return pointerAngle(p.clientX, p.clientY, q.clientX, q.clientY);
     };
     const startT = (e: TouchEvent) => {
-      if (e.touches.length === 2) {
-        cancelAnimationFrame(anim.current);
-        t = { a: ang(e), b: map.getBearing(), on: false };
+      if (e.touches.length === 2) t = { a: ang(e), b0: map.getBearing(), on: false };
+      else if (t?.on) {
+        t = null;
+        release();
       } else t = null;
     };
     const moveT = (e: TouchEvent) => {
@@ -971,50 +1126,48 @@ function Compass({ map, root, steer }: { map: L.Map | null; root: RefObject<HTML
       if (!t.on) {
         if (Math.abs(d) < TWIST_DEAD_ZONE_DEG) return;
         t.on = true;
+        begin();
         t.a += Math.sign(d) * TWIST_DEAD_ZONE_DEG; // start turning from here, without a jump
+        t.b0 = s.cur;
         d = normDeg(ang(e) - t.a);
       }
-      map.setBearing(t.b + d);
+      request(t.b0 + d);
     };
     const endT = (e: TouchEvent) => {
-      if (e.touches.length < 2) t = null;
+      if (e.touches.length >= 2 || !t) return;
+      const engaged = t.on;
+      t = null;
+      if (engaged) release();
     };
-    el.addEventListener("touchstart", startT, { passive: true });
-    el.addEventListener("touchmove", moveT, { passive: true });
-    el.addEventListener("touchend", endT, { passive: true });
-    el.addEventListener("touchcancel", endT, { passive: true });
+    mapEl.addEventListener("touchstart", startT, { passive: true });
+    mapEl.addEventListener("touchmove", moveT, { passive: true });
+    mapEl.addEventListener("touchend", endT, { passive: true });
+    mapEl.addEventListener("touchcancel", endT, { passive: true });
     return () => {
-      el.removeEventListener("touchstart", startT);
-      el.removeEventListener("touchmove", moveT);
-      el.removeEventListener("touchend", endT);
-      el.removeEventListener("touchcancel", endT);
+      cancelAnimationFrame(s.raf);
+      cancelAnimationFrame(s.anim);
+      clearTimeout(s.hide);
+      el.removeEventListener("pointerdown", down, true);
+      el.removeEventListener("pointermove", move, true);
+      el.removeEventListener("pointerup", up, true);
+      el.removeEventListener("pointercancel", up, true);
+      el.removeEventListener("touchstart", block, true);
+      el.removeEventListener("mousedown", block, true);
+      mapEl.removeEventListener("touchstart", startT);
+      mapEl.removeEventListener("touchmove", moveT);
+      mapEl.removeEventListener("touchend", endT);
+      mapEl.removeEventListener("touchcancel", endT);
+      api.current = null;
     };
-  }, [map]);
-  useEffect(() => () => cancelAnimationFrame(anim.current), []);
-
-  const resetNorth = () => {
-    if (!map) return;
-    cancelAnimationFrame(anim.current);
-    const from = normDeg(map.getBearing());
-    if (from === 0) return;
-    if (reducedMotion()) return void map.setBearing(0);
-    const t0 = performance.now();
-    const step = (t: number) => {
-      const k = Math.min(1, (t - t0) / 300);
-      map.setBearing(from * (1 - (1 - (1 - k) ** 3))); // ease-out, 0.3 s
-      if (k < 1) anim.current = requestAnimationFrame(step);
-    };
-    anim.current = requestAnimationFrame(step);
-  };
+  }, [map, root]);
 
   return (
-    <div className="compass">
-      <svg className="compass-steer" aria-hidden>
-        <circle ref={steer} />
-      </svg>
+    <div ref={compassRef} className="compass">
+      {/* Where to grab the ring: a few grip dots on the bezel (fixed on screen). */}
+      <span className="compass-grip" aria-hidden />
       {(["N", "E", "S", "W"] as const).map((l, i) =>
         l === "N" ? (
-          <button key={l} type="button" className="compass-letter is-north" style={{ "--a": "0deg" } as React.CSSProperties} onClick={resetNorth} aria-label="Turn the map to north up" title="North up">
+          <button key={l} type="button" className="compass-letter is-north" style={{ "--a": "0deg" } as React.CSSProperties} onClick={() => api.current?.toNorth()} aria-label="Turn the map to north up" title="North up">
             N
           </button>
         ) : (
@@ -1023,6 +1176,43 @@ function Compass({ map, root, steer }: { map: L.Map | null; root: RefObject<HTML
           </span>
         ),
       )}
+      <div ref={readoutRef} className="bearing-readout" aria-live="off" />
+    </div>
+  );
+}
+
+const ROTATE_HINT_KEY = "tpulso:rotateHintSeen";
+/** TPulso: a one-time hint ("Drag the ring to rotate"), gone for good once dismissed or once the map is turned. */
+function RotateHint({ map }: { map: L.Map | null }) {
+  const [show, setShow] = useState(() => {
+    try {
+      return localStorage.getItem(ROTATE_HINT_KEY) !== "1";
+    } catch {
+      return false; // no storage: never nag
+    }
+  });
+  const dismiss = useCallback(() => {
+    setShow(false);
+    try {
+      localStorage.setItem(ROTATE_HINT_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    if (!map || !show) return;
+    map.on("rotatestart", dismiss);
+    return () => {
+      map.off("rotatestart", dismiss);
+    };
+  }, [map, show, dismiss]);
+  if (!show) return null;
+  return (
+    <div className="rotate-hint" role="note">
+      <span>Drag the ring to rotate</span>
+      <button type="button" onClick={dismiss} aria-label="Dismiss the hint" className="rotate-hint-close">
+        ×
+      </button>
     </div>
   );
 }
@@ -1073,10 +1263,28 @@ export default memo(function TransitMap({
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const steerRef = useRef<SVGCircleElement>(null);
   const [leafletMap, setLeafletMap] = useState<L.Map | null>(null);
   // One canvas for all route lines (cheaper than hundreds of SVG paths; smoothFactor stays 0).
-  const lineRenderer = useMemo(() => L.canvas({ padding: 0.3 }), []);
+  const lineRenderer = useMemo(() => {
+    const r = L.canvas({ padding: 0.3 });
+    // Leaflet-rotate redraws every line on each rotation step; the canvas (1.6 × the view) covers the radar
+    // circle at any angle, so it is redrawn once, when the gesture ends (rotateend, below).
+    const events = r.getEvents!.bind(r);
+    r.getEvents = () => {
+      const e = events();
+      delete e.rotate;
+      return e;
+    };
+    return r;
+  }, []);
+  useEffect(() => {
+    if (!leafletMap) return;
+    const redraw = () => (lineRenderer as unknown as { _update(): void })._update();
+    leafletMap.on("rotateend", redraw);
+    return () => {
+      leafletMap.off("rotateend", redraw);
+    };
+  }, [leafletMap, lineRenderer]);
   // Recenter shows while the radar centre (map centre) is away from the user.
   const away = Math.hypot((center.lat - userPos.lat) * 111_320, (center.lng - userPos.lng) * 111_320 * Math.cos((center.lat * Math.PI) / 180)) > 25;
   const [recenterSignal, setRecenterSignal] = useState(0);
@@ -1224,12 +1432,15 @@ export default memo(function TransitMap({
         onSelect={onSelect}
         operatorName={operatorName}
       />
-      <SonarGeometry radius={radius} disc={discRef} root={rootRef} steer={steerRef} />
+      <SonarGeometry radius={radius} disc={discRef} root={rootRef} />
     </MapContainer>
       {/* TPulso: the radar disc and bezel are a screen overlay; they never capture drags or taps. */}
       <div ref={discRef} className="radar-disc" aria-hidden />
       <div className="sonar-bezel" aria-hidden />
-      <Compass map={leafletMap} root={rootRef} steer={steerRef} />
+      {/* The ring's ticks turn with the map as one compositor layer (transform), never repainted per step. */}
+      <div className="sonar-ticks" aria-hidden />
+      <Compass map={leafletMap} root={rootRef} />
+      <RotateHint map={leafletMap} />
       {/* TPulso additions: missing tile key notice and the Recenter button while exploring. */}
       {MAP_TILES.problem && (
         <p className="pointer-events-none absolute left-1/2 top-2 z-[480] -translate-x-1/2 rounded-lg bg-surface/90 px-2 py-1 text-center text-[10px] text-muted-foreground">
