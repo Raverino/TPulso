@@ -1060,3 +1060,9 @@ button.is-pressed:not(:disabled):not(.compass-letter),
     animation: none;
   }
 }
+
+/* TPulso: a station with no departure in the next hour (e.g. a tram stop at night): dimmed, still tappable. */
+.station.is-idle .station-ring,
+.station.is-idle .station-core {
+  opacity: 0.45;
+}

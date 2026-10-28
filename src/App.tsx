@@ -45,6 +45,8 @@ const region = LISBON;
 const RADII = region.radii as Radius[];
 /** Departures in the next 10 minutes, as in the original. */
 const WINDOW_MS = 600_000;
+/** A station's ring shows the modes with a departure within this time. */
+const RUNNING_WINDOW_MS = 3_600_000;
 /** What kind of stop a place is, from every line serving it (bus stops are often named after a nearby metro;
  * a Carris stop can serve trams and buses): "Tram and bus stop". */
 const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | undefined }[]) =>
@@ -299,6 +301,22 @@ export default function App() {
     const inRadar = new Set(nearStops.map((s) => s.id));
     return allStations.filter((st) => st.stopIds.some((id) => inRadar.has(id)));
   }, [allStations, nearStops]);
+  // TPulso: the modes actually running at each stop in the next hour (the ring shows those, e.g. no tram
+  // purple at a tram + bus stop once the trams have stopped for the night). Cached per stop per 5 minutes.
+  const runningBucket = Math.floor(now / 300_000) * 300_000;
+  const runningCache = useRef<{ key: string; areas: AreaFile[] | null; byStop: Map<string, Set<TransportMode>> }>({ key: "", areas: null, byStop: new Map() });
+  const runningModes = useMemo(() => {
+    if (!manifest || expired) return null;
+    const key = `${manifest.version}|${runningBucket}`;
+    if (runningCache.current.key !== key || runningCache.current.areas !== tt.areas) runningCache.current = { key, areas: tt.areas, byStop: new Map() };
+    const cache = runningCache.current.byStop;
+    for (const st of stations) {
+      for (const id of st.stopIds) {
+        if (!cache.has(id)) cache.set(id, new Set(departuresAtStop(manifest, tt.areas, id, runningBucket, runningBucket + RUNNING_WINDOW_MS).map((d) => d.mode)));
+      }
+    }
+    return cache;
+  }, [manifest, expired, runningBucket, tt.areas, stations]);
   const mapStations: MapStation[] = useMemo(() => {
     const perStop = new Map<string, number>();
     for (const d of board ?? []) {
@@ -306,19 +324,25 @@ export default function App() {
       if (filter !== "all" && d.mode !== filter) continue;
       perStop.set(d.stopArea, (perStop.get(d.stopArea) ?? 0) + 1);
     }
-    return stations.map((st) => ({
-      id: st.id,
-      name: st.name,
-      nameKey: st.nameKey,
-      kind: st.kind,
-      heading: st.heading,
-      lat: st.lat,
-      lng: st.lng,
-      modes: filter === "all" ? st.modes : st.modes.filter((m) => m === filter),
-      departures: st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0),
-      size: stationSize(st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0)),
-    }));
-  }, [stations, board, boardNow, filter]);
+    return stations.map((st) => {
+      const served = filter === "all" ? st.modes : st.modes.filter((m) => m === filter);
+      const running = runningModes ? served.filter((m) => st.stopIds.some((id) => runningModes.get(id)?.has(m))) : served;
+      return {
+        id: st.id,
+        name: st.name,
+        nameKey: st.nameKey,
+        kind: st.kind,
+        heading: st.heading,
+        lat: st.lat,
+        lng: st.lng,
+        // Ring: the modes running in the next hour; none → all served modes, and the marker is dimmed (idle).
+        modes: running.length ? running : served,
+        idle: !!runningModes && running.length === 0,
+        departures: st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0),
+        size: stationSize(st.stopIds.reduce((n, id) => n + (perStop.get(id) ?? 0), 0)),
+      };
+    });
+  }, [stations, board, boardNow, filter, runningModes]);
 
   const [pinned, setPinned] = useState<Pinned | null>(null);
   useEffect(() => {

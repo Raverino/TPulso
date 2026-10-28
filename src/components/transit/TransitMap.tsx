@@ -52,6 +52,8 @@ export interface MapStation {
   size: number;
   /** Departures in the next 10 minutes (busier stations seed the area points). */
   departures: number;
+  /** No departure of any (filtered) mode in the next hour: the marker is dimmed. */
+  idle?: boolean;
 }
 
 /** TPulso: a stop of the selected vehicle, in its mode colour. */
@@ -82,7 +84,7 @@ function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel
   // `chip`: include the direction chip even when not selected (CSS shows it only on .is-selected), so a
   // selection can change by toggling a class, without a new icon.
   const heading = (selected || chip) && s.kind === "platform" && s.heading !== null ? Math.round(s.heading) : null;
-  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${badge ?? ""}|${withLabel ? 1 : 0}`;
+  const key = `${s.modes.join(",")}|${s.size}|${selected ? 1 : 0}|${s.name}|${heading ?? ""}|${badge ?? ""}|${withLabel ? 1 : 0}|${s.idle ? 1 : 0}`;
   const hit = stationIconCache.get(key);
   if (hit) return hit;
   const n = Math.max(1, s.modes.length);
@@ -98,7 +100,7 @@ function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel
     className: "",
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
-    html: `<div class="station${selected ? " is-selected" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${dir}${tag}</div>`,
+    html: `<div class="station${selected ? " is-selected" : ""}${s.idle ? " is-idle" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${dir}${tag}</div>`,
   });
   stationIconCache.set(key, icon);
   return icon;
