@@ -36,6 +36,8 @@ export interface OperatorInfo {
   id: string;
   name: string;
   modes: TransportMode[];
+  /** Regional GTFS agency_ids of this operator (links operator-wide alerts by key, shared/alerts.ts). */
+  agencies: string[];
   /** First and last service date in the feed (YYYYMMDD). */
   dateFrom: string;
   dateTo: string;
@@ -92,6 +94,11 @@ export interface PatternData {
   mode: TransportMode;
   /** Operator id (Manifest.operators[].id). */
   op: string;
+  /**
+   * Line id of the GTFS route (lineIdOfRoute, e.g. "[BNA17]2303"), the key service alerts use. Absent when the
+   * route id has no line id, and in timetables built before 2026-10-28.
+   */
+  lineId?: string;
   headsign: string;
   /** Index of stops[0] in the full pattern (0 for a route file). */
   first: number;

@@ -1,5 +1,6 @@
 // Core GTFS -> offline timetable conversion (docs/OFFLINE.md). Pure apart from reading rows from a
 // GtfsSource, so it is tested on fixtures/gtfs-tml-sample and run on the full TML feed by the CLI.
+import { lineIdOfRoute } from '../../shared/alerts.ts';
 import {
   addDays,
   areaKey,
@@ -201,12 +202,13 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
 
   const { mask, span } = await readServices(src, opt.today, opt.days);
 
-  const routes = new Map<string, { op: OperatorConfig; line: string; mode: TransportMode; color: string; text: string }>();
+  const routes = new Map<string, { op: OperatorConfig; lineId: string | null; line: string; mode: TransportMode; color: string; text: string }>();
   for await (const r of src('routes.txt')) {
     const op = opOfAgency.get(r.agency_id!);
     if (!op) continue;
     routes.set(r.route_id!, {
       op,
+      lineId: lineIdOfRoute(r.route_id!),
       line: r.route_short_name || r.route_long_name || '?',
       mode: modeOfRouteType(Number(r.route_type)),
       color: r.route_color ? `#${r.route_color}` : '',
@@ -246,7 +248,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
     else if (today === 0) excluded.push({ id: o.id, name: o.name, reason: `no trips on ${opt.today} (feed dates ${sp[0]}–${sp[1]})` });
     else {
       included.add(o.id);
-      operators.push({ id: o.id, name: o.name, modes: [], dateFrom: sp[0], dateTo: sp[1], tripsToday: today });
+      operators.push({ id: o.id, name: o.name, modes: [], agencies: [...o.agencies], dateFrom: sp[0], dateTo: sp[1], tripsToday: today });
     }
   }
   for (const [id, t] of trips) if (!included.has(routes.get(t.route)!.op.id)) trips.delete(id);
@@ -373,7 +375,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
     const dist = stopDistances(shape, cum, pts);
     const profiles = [...p.profiles.keys()].map(s => s.split(',').map(Number));
     const base = {
-      id: p.id, line: r.line, color: r.color, textColor: r.text, mode: r.mode, op: r.op.id, headsign: p.headsign,
+      id: p.id, line: r.line, ...(r.lineId ? { lineId: r.lineId } : {}), color: r.color, textColor: r.text, mode: r.mode, op: r.op.id, headsign: p.headsign,
       total: p.stops.length, trips: p.trips,
     };
     const fullShape = encodePolyline(sliceShape(shape, cum, dist[0]!, dist[dist.length - 1]!));

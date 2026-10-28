@@ -92,3 +92,38 @@ Scraping any of these web pages is not done without your approval.
 3. Optional: Transtejo/Soflusa RSS through the Worker as operator-wide notices.
 4. Converter: keep the GTFS `route_id` per pattern (and `agency_id` per operator) so alerts link by key.
 5. Ask TML (and Carris Metropolitana) about terms of use before a public release.
+
+## Phase 2 — built 2026-10-28
+
+Owner decisions: TML hub as the main source (yes); Transtejo/Soflusa RSS as operator-wide notices (yes); converter
+keeps the line key (yes); Metro's undocumented line-status endpoint: **left out**; line id rule `lineIdOfRoute`:
+approved (docs/DATA.md §5).
+
+**Endpoint.** `GET /api/alerts` on the Worker, behind its own flag `ALERTS_ENABLED` (wrangler.jsonc; `"false"` until
+the phase 3 screen exists). Independent of `LIVE_ENABLED`: alerts work in the offline version. Answer
+(`AlertList`, `shared/alerts.ts`):
+
+```
+{ generatedAt, sources: [{ id: "tml", ok: true, count: 118 }, { id: "ttsl", ok: false, count: 0, error: "upstream 503" }],
+  alerts: [{ id, source, agencyId, scope: "lines"|"stops"|"agency", lines: [{ lineId, stopIds }],
+             stops: [{ stopId, lineIds }], title, description, cause, effect, start, end, endAssumed, url, imageUrl }] }
+```
+
+- **Partial results**: each source is read on its own. One failing source → the others are still served and
+  `sources` says which failed; all failing → `502 alerts_unavailable` (never an empty list that looks like "no
+  problems").
+- **Caching**: the finished list is kept 60 s in the Worker (15 s after a partial failure; a total failure is not
+  kept), upstream responses are edge-cached (hub 60 s, RSS 5 min), and the browser may keep the answer 60 s.
+- **Normalised**: ended alerts are dropped (announced ones are kept, with their start); the hub's repeated
+  references are merged; only `https` links are passed on; text stays Portuguese as published.
+- **Transtejo/Soflusa**: each RSS item becomes an operator-wide notice (agency `LTP61`). The feed gives no validity:
+  `start` = publication time, `end` = 30 days later, `endAssumed: true` (the UI must say "published on …", not
+  "valid until …"). A notice disappears earlier as soon as the operator removes it from the feed (10 latest items).
+- **Linking in the app (phase 3)**, by key only: line alerts via `PatternData.lineId`; stop alerts via the stop id;
+  agency alerts via `OperatorInfo.agencies`. A TML line alert whose line id is in no pattern (MobiCascais, or a line
+  not running in the window) can only be shown under its operator.
+- Metro de Lisboa: its alerts come from the hub by line (e.g. `[IA2N9]2` → line Am). The hub's Metro stop ids are
+  regional; Metro stops in the timetable come from Metro's own feed, so Metro alerts are linked by line, not stop.
+
+Code: `worker/providers/alerts/` (`tmlHub.ts`, `ttslRss.ts`, `provider.ts`), route in `worker/index.ts`, tests in
+`worker/alerts.test.ts` (on the saved samples) and `scripts/timetable/convert.test.ts` (line keys).

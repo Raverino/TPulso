@@ -77,6 +77,12 @@ vehicle ── vehicle.stop_id ══ exact ══ /stops.id   (357/367; rest "U
 
 1. Use the **v2 JSON API as the single source.** Do not mix in GTFS-zip IDs at runtime (different stop numbers and plans, see below).
 2. Keep **one** tested function, `stripNamespace(id)`, that removes leading `[XXXXX]` groups. Use it only for the two missing links in §3, never on names. *(Approved by the owner 2026-10-25.)*
+   - **Second approved id rule — service alerts (2026-10-28):** `lineIdOfRoute(routeId)` in `shared/alerts.ts`. TML
+     alerts name a line (`[BNA17]2303`); the GTFS only has its route variants (`[BNA17]2303_0`, `_1`). The rule
+     drops the last `_<number>`; route ids of another form (MobiCascais `[HF16N]M25_A`, TCB) get no line id, so their
+     line alerts are never linked by name. The converter stores the result as `lineId` on each pattern. Check on
+     2026-10-28: 413 of 419 line references and 65 of 65 stop references in the live alerts link to the timetable;
+     the rest are MobiCascais (4) and two lines with no trips in the 14-day window (see docs/ALERTS.md).
 3. `stopsNear`: the API cannot query by location. Our server fetches the 6.8 MB `/stops` list and serves a **trimmed, compressed list** (`id`, `name`, `lat`, `lng` only; stops without any line left out). The phone caches it (IndexedDB), refreshes it about once a day, and filters by radius locally. The phone never downloads the raw `/stops` list or the 78 MB GTFS zip.
 6. Departures from `/arrivals/by_stop` can include **city Carris** lines (agency `IA9T6`, e.g. lines 702, 711, 748 at stop 060035). They are not in `/lines` and are out of scope: departures whose line is not in `/lines` are left out.
 4. Drop vehicles reported at `lat 0, lon 0` (no GPS fix; 1 of 367 in the fixture). Ignore `vehicle.stop_id === "UNAVAILABLE_STOP_ID"`. The capacity fields are 0 and make/model are null: do not show them.

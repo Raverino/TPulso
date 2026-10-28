@@ -1,9 +1,15 @@
+import type { AlertsProvider } from '../shared/alerts';
 import { LISBON } from '../shared/region';
 import type { TransitProvider } from '../shared/types';
+import { AllSourcesFailed, CombinedAlerts } from './providers/alerts/provider';
+import { TmlHubAlerts } from './providers/alerts/tmlHub';
+import { TtslRssAlerts } from './providers/alerts/ttslRss';
 import { TmlProvider } from './providers/tml/provider';
 
 // One provider per Worker instance, so its in-memory caches are shared across requests.
 const provider: TransitProvider = new TmlProvider(LISBON);
+// Service alerts (docs/ALERTS.md): the TML hub, plus Transtejo/Soflusa notices as operator-wide notices.
+const alertsProvider: AlertsProvider = new CombinedAlerts([new TmlHubAlerts(), new TtslRssAlerts()]);
 
 const MAX_VEHICLE_RADIUS_M = 5000;
 const MAX_BOARD_RADIUS_M = 1000;
@@ -61,14 +67,35 @@ export async function handleApi(url: URL, p: TransitProvider, now: Date): Promis
   return error(404, 'not_found');
 }
 
+/**
+ * GET /api/alerts: every alert source combined (partial when a source fails; 502 only when all fail). Cached for
+ * 60 s by the provider and the browser.
+ */
+export async function handleAlerts(p: AlertsProvider, now: Date): Promise<Response> {
+  try {
+    return json(await p.alerts(now.getTime()), 60);
+  } catch (e) {
+    if (e instanceof AllSourcesFailed) return error(502, 'alerts_unavailable');
+    throw e;
+  }
+}
+
 interface Env {
   /** Feature flag for the TML live API (docs/OFFLINE.md §7). Off ("false") in the offline timetable version. */
   LIVE_ENABLED?: string;
+  /** Feature flag for service alerts (/api/alerts, docs/ALERTS.md). Independent of LIVE_ENABLED. */
+  ALERTS_ENABLED?: string;
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // Alerts are not live vehicle data: they have their own flag and work in the offline version.
+    if (url.pathname === '/api/alerts') {
+      if (env.ALERTS_ENABLED !== 'true') return error(404, 'alerts_disabled');
+      if (request.method !== 'GET') return error(405, 'method_not_allowed');
+      return handleAlerts(alertsProvider, new Date());
+    }
     // The live provider is kept (and tested via handleApi) but switched off: no live API calls at runtime.
     if (env.LIVE_ENABLED !== 'true') return error(404, 'live_disabled');
     // Feedback panel (ported from the original): no storage is configured in the MVP (no database),

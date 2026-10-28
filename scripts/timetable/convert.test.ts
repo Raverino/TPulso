@@ -76,6 +76,14 @@ describe('patterns and trips', () => {
     expect(res.stats.duplicateTrips).toBe(res.stats.tripsInWindow);
     expect(res.operators.find(o => o.id === 'cm')?.tripsToday).toBe(2);
   });
+  it('keeps the line key service alerts use (route id without its variant) and the operator agency ids', async () => {
+    const res = await resP;
+    const lineIds = Object.fromEntries([...res.routes.values()].map(r => [r.line, r.lineId]));
+    expect(lineIds).toMatchObject({ '3715': '[YA15B]3715', Az: '[IA2N9]1', MT: '[LTP61]1', '15E': '[IA9T6]76' });
+    const area = [...res.areas.values()].flatMap(a => a.patterns).find(p => p.line === '3715')!;
+    expect(area.lineId).toBe('[YA15B]3715'); // area slices carry it too
+    expect(res.operators.find(o => o.id === 'cm')!.agencies).toEqual(['LA77N', 'BNA17', 'YA15B', 'A2L1N']);
+  });
   it('maps route types to filter modes', () => {
     expect([0, 1, 2, 3, 4, 109, 1200].map(modeOfRouteType)).toEqual(['tram', 'tram', 'train', 'bus', 'ferry', 'train', 'ferry']);
   });
@@ -249,5 +257,7 @@ describe('Metro from its own feed (replaceOperatorFeed)', () => {
     const byId = Object.fromEntries(res.operators.map(o => [o.id, o]));
     expect(byId.metro).toMatchObject({ tripsToday: 2, modes: ['tram'] });
     expect(byId.cm).toMatchObject({ tripsToday: 2, modes: ['bus'] });
+    // Metro's own trips still carry the regional line key, so Metro line alerts link to them.
+    for (const r of res.routes.values()) if (r.op === 'metro') expect(r.lineId).toBe('[IA2N9]1');
   });
 });
