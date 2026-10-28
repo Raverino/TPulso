@@ -19,7 +19,8 @@ import {
 } from "@/lib/transit";
 // TPulso: data-source states (Live / Scheduled / Estimated / Stale) and CARTO tiles.
 import { type SourceState } from "@/lib/sourceStatus";
-import { MAP_TILES, MODE_COLORS } from "@/config";
+import { MAP_TILES, MODE_COLORS, mapTilesFor } from "@/config";
+import { useAppearance } from "@/appearance";
 import { clusterScreen, initialsOf, letterFor, letterOrder, shortLabel, spreadOffsets, uniqueInitials } from "@/offline/stations";
 import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
 
@@ -172,8 +173,8 @@ function vehicleIcon(v: Vehicle) {
     // TPulso: the pin colour comes only from the mode (src/config.ts MODE_COLORS).
     html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
         <span class="src-dot src-expected pin-src"></span>
-        <span style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
-        <span>${esc(v.line)}</span>
+        <span class="pin-glyph" style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
+        <span class="pin-line">${esc(v.line)}</span>
         ${unknown ? `<span class="unknown-badge">?</span>` : ""}
       </div>`,
   });
@@ -1250,6 +1251,8 @@ const perMode = <T,>(f: (m: TransportMode) => T) =>
 const LINE_STYLE = {
   base: perMode((m) => ({ weight: 2.5, opacity: 0.35, color: MODE_COLORS[m], ...ROUND })),
   casing: [false, true].map((sel) => ({ weight: sel ? 8 : 6, opacity: 0.7, color: "#0b0f19", ...ROUND })),
+  /** On the light "Azulejo" map the outline under a line is white, not near-black. */
+  casingLight: [false, true].map((sel) => ({ weight: sel ? 8 : 6, opacity: 0.85, color: "#ffffff", ...ROUND })),
   route: [false, true].map((sel) => perMode((m) => ({ weight: sel ? 4 : 3, opacity: sel ? 0.9 : 0.75, color: MODE_COLORS[m], ...ROUND }))),
 };
 
@@ -1288,6 +1291,9 @@ export default memo(function TransitMap({
   const rootRef = useRef<HTMLDivElement>(null);
   const [leafletMap, setLeafletMap] = useState<L.Map | null>(null);
   // One canvas for all route lines (cheaper than hundreds of SVG paths; smoothFactor stays 0).
+  // Appearance (Standard / Azulejo): the map tiles and the line outline follow it; everything else is CSS.
+  const appearance = useAppearance();
+  const tiles = mapTilesFor(appearance);
   const lineRenderer = useMemo(() => {
     const r = L.canvas({ padding: 0.3 });
     // Leaflet-rotate redraws every line on each rotation step; the canvas (1.6 × the view) covers the radar
@@ -1369,7 +1375,7 @@ export default memo(function TransitMap({
       className="h-full w-full"
     >
       {/* TPulso: CARTO dark_nolabels tiles (src/config.ts); the original's dark CSS filter is removed. */}
-      <TileLayer url={MAP_TILES.url} attribution={MAP_TILES.attribution} maxZoom={MAP_TILES.maxZoom} className={MAP_TILES.className} />
+      <TileLayer key={appearance} url={tiles.url} attribution={tiles.attribution} maxZoom={tiles.maxZoom} className={tiles.className} />
       <MapController userPos={userPos} radius={radius} recenterSignal={recenterSignal} autoRecenter={autoRecenter && !riding} follow={riding} onCenter={onMapCenter} />
       <ClearOnMapClick onClear={clear} />
 
@@ -1427,7 +1433,7 @@ export default memo(function TransitMap({
         <Polyline
           key={`casing-${r.id}`}
           positions={r.path}
-          pathOptions={LINE_STYLE.casing[selected ? 1 : 0]}
+          pathOptions={(appearance === "azulejo" ? LINE_STYLE.casingLight : LINE_STYLE.casing)[selected ? 1 : 0]}
           smoothFactor={0}
           renderer={lineRenderer}
           interactive={false}

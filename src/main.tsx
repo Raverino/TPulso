@@ -2,11 +2,12 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
-import { applyThemeColors } from './config';
+import { applyAppearance } from './appearance';
 import { installPressedState } from './lib/pressed';
 
-// The four mode colours and the radar colour come from src/config.ts (one place).
-applyThemeColors();
+// The four mode colours and the radar colour come from src/config.ts (one place); the appearance (Standard or
+// Azulejo) is applied before the first paint.
+applyAppearance();
 installPressedState();
 
 createRoot(document.getElementById('root')!).render(

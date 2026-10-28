@@ -1066,3 +1066,362 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 .station.is-idle .station-core {
   opacity: 0.45;
 }
+
+/* --- TPulso: appearance switch in the top bar (Standard ↔ Azulejo; src/appearance.ts) ------------------ */
+.appearance-switch {
+  min-height: 32px;
+}
+.appearance-switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.appearance-track {
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 16px;
+  border-radius: 9999px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition: background-color 200ms ease-out;
+}
+.appearance-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--foreground);
+  transition: translate 200ms ease-out;
+}
+.appearance-track.is-on {
+  background: var(--cobalt);
+}
+.appearance-track.is-on .appearance-knob {
+  translate: 14px 0;
+  background: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .appearance-track,
+  .appearance-knob {
+    transition: none;
+  }
+}
+
+/* --- TPulso: "Azulejo" appearance — white and cobalt, Portuguese tiles and transport ----------------------
+ * Everything below applies only with <html data-appearance="azulejo">; Standard is the rest of this file.
+ * The four mode colours keep their meaning: vehicles are glazed tiles (pale mode glaze + a flower in the mode
+ * colour, after the board game Azul), stations are diamond tiles with a mode-coloured frame. The radar edge and
+ * the user dot stay neutral grey (--radar); cobalt is only the tile decoration. */
+:root[data-appearance="azulejo"] {
+  --radius: 0.25rem;
+  --background: #ffffff;
+  --foreground: #14335a;
+  --surface: #ffffff;
+  --surface-2: #eef4fb;
+  --card: #ffffff;
+  --card-foreground: #14335a;
+  --popover: #ffffff;
+  --popover-foreground: #14335a;
+  --primary: #1d4f8f;
+  --primary-foreground: #ffffff;
+  --secondary: #e4edf8;
+  --secondary-foreground: #14335a;
+  --muted: #eef4fb;
+  --muted-foreground: #4a6a90;
+  --accent: #2f6db5;
+  --accent-foreground: #ffffff;
+  --border: rgb(29 79 143 / 22%);
+  --input: rgb(29 79 143 / 28%);
+  --ring: rgb(29 79 143 / 55%);
+  --src-scheduled: oklch(0.55 0.05 250);
+  --src-stale: oklch(0.6 0.01 250);
+  --src-estimated: oklch(0.55 0.15 300);
+  /* one azulejo tile (40 px): a cobalt quatrefoil, quarter flowers in the corners, thin glaze joints */
+  --azulejo-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' fill='%23fff'/%3E%3Cg fill='%231d4f8f'%3E%3Cellipse cx='20' cy='12' rx='3.6' ry='6'/%3E%3Cellipse cx='20' cy='28' rx='3.6' ry='6'/%3E%3Cellipse cx='12' cy='20' rx='6' ry='3.6'/%3E%3Cellipse cx='28' cy='20' rx='6' ry='3.6'/%3E%3Ccircle cx='0' cy='0' r='7'/%3E%3Ccircle cx='40' cy='0' r='7'/%3E%3Ccircle cx='0' cy='40' r='7'/%3E%3Ccircle cx='40' cy='40' r='7'/%3E%3C/g%3E%3Cg fill='%23fff'%3E%3Ccircle cx='20' cy='20' r='3'/%3E%3Ccircle cx='0' cy='0' r='3'/%3E%3Ccircle cx='40' cy='0' r='3'/%3E%3Ccircle cx='0' cy='40' r='3'/%3E%3Ccircle cx='40' cy='40' r='3'/%3E%3C/g%3E%3Cg fill='%237fa3d1'%3E%3Ccircle cx='20' cy='0' r='2'/%3E%3Ccircle cx='0' cy='20' r='2'/%3E%3Ccircle cx='40' cy='20' r='2'/%3E%3Ccircle cx='20' cy='40' r='2'/%3E%3C/g%3E%3Cpath d='M0 .5H40M.5 0V40' stroke='%23c9d9ee'/%3E%3C/svg%3E");
+  /* the Azul flower on a vehicle tile: four petals and four corner dots (used as a mask, any colour) */
+  --azul-flower: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cellipse cx='16' cy='6.5' rx='4.6' ry='6.5'/%3E%3Cellipse cx='16' cy='25.5' rx='4.6' ry='6.5'/%3E%3Cellipse cx='6.5' cy='16' rx='6.5' ry='4.6'/%3E%3Cellipse cx='25.5' cy='16' rx='6.5' ry='4.6'/%3E%3Ccircle cx='3' cy='3' r='2.4'/%3E%3Ccircle cx='29' cy='3' r='2.4'/%3E%3Ccircle cx='3' cy='29' r='2.4'/%3E%3Ccircle cx='29' cy='29' r='2.4'/%3E%3C/svg%3E");
+}
+
+/* Map chrome */
+[data-appearance="azulejo"] .leaflet-container {
+  background: #eef3f8;
+}
+[data-appearance="azulejo"] .leaflet-control-attribution {
+  background: rgb(255 255 255 / 0.85) !important;
+}
+/* Top bar: a strip of small blue-and-white tiles along its lower edge */
+[data-appearance="azulejo"] .app-header {
+  border-bottom: 0;
+  padding-bottom: calc(0.5rem + 8px);
+  background:
+    conic-gradient(var(--cobalt) 25%, #fff 0 50%, var(--cobalt) 0 75%, #fff 0) 0 100% / 8px 8px repeat-x,
+    var(--surface);
+}
+
+/* Bezel: azulejo panels around the radar disc, a white band for the compass, a cobalt rim */
+[data-appearance="azulejo"] .sonar-bezel {
+  background:
+    radial-gradient(
+      circle at var(--x) var(--y),
+      transparent calc(var(--r) - 1px),
+      color-mix(in oklch, var(--radar) 85%, transparent) var(--r),
+      color-mix(in oklch, var(--radar) 85%, transparent) calc(var(--r) + 2px),
+      var(--cobalt) calc(var(--r) + 2px),
+      var(--cobalt) calc(var(--r) + 4px),
+      #fff calc(var(--r) + 4px),
+      #fff calc(var(--r) + 19px),
+      var(--cobalt) calc(var(--r) + 19px),
+      var(--cobalt) calc(var(--r) + 22px),
+      transparent calc(var(--r) + 22px)
+    ),
+    var(--azulejo-tile) 0 0 / 40px 40px;
+  -webkit-mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
+  mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
+}
+[data-appearance="azulejo"] .sonar-ticks {
+  display: none;
+}
+/* Compass: each letter a small white tile; N is a cobalt diamond (drawn by ::before so the button keeps its size) */
+[data-appearance="azulejo"] .compass-letter {
+  border-radius: 3px;
+  background: #fff;
+  color: var(--cobalt);
+  box-shadow: inset 0 0 0 1.5px var(--cobalt);
+}
+[data-appearance="azulejo"] .compass-letter.is-north {
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+}
+[data-appearance="azulejo"] .compass-letter.is-north::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border-radius: 2px;
+  background: var(--cobalt);
+  box-shadow: 0 0 0 1.5px #fff;
+  rotate: 45deg;
+}
+[data-appearance="azulejo"] .compass-grip {
+  background:
+    radial-gradient(circle, var(--cobalt) 0 1.6px, transparent 2px) 0 50% / 8.6px 10px repeat-x,
+    #fff;
+  box-shadow: 0 0 0 1.5px var(--cobalt);
+  opacity: 1;
+}
+[data-appearance="azulejo"] .bearing-readout,
+[data-appearance="azulejo"] .rotate-hint {
+  border-radius: 4px;
+  background: var(--cobalt);
+  color: #fff;
+  box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px var(--cobalt);
+}
+
+/* User dot: neutral grey (as in Standard) on a white edge */
+[data-appearance="azulejo"] .locate-dot {
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 4px rgb(20 51 90 / 0.25);
+}
+
+/* Vehicles: Azul flower tiles. Glaze in the pale mode colour, the flower in the mode colour, the line number
+   on a white disc in the middle, the mode icon small in a corner. Expected = dashed cobalt outline. */
+[data-appearance="azulejo"] .vehicle-pin {
+  border-radius: 4px;
+  border: 0;
+  background: var(--glaze);
+  color: var(--foreground);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.9),
+    0 0 0 1.5px var(--tile),
+    0 1px 2px rgb(20 51 90 / 0.35);
+}
+[data-appearance="azulejo"] .vehicle-pin[data-mode="bus"] {
+  --glaze: var(--bus-glaze);
+  --tile: var(--bus-tile);
+}
+[data-appearance="azulejo"] .vehicle-pin[data-mode="tram"] {
+  --glaze: var(--tram-glaze);
+  --tile: var(--tram-tile);
+}
+[data-appearance="azulejo"] .vehicle-pin[data-mode="train"] {
+  --glaze: var(--train-glaze);
+  --tile: var(--train-tile);
+}
+[data-appearance="azulejo"] .vehicle-pin[data-mode="ferry"] {
+  --glaze: var(--ferry-glaze);
+  --tile: var(--ferry-tile);
+}
+[data-appearance="azulejo"] .vehicle-pin::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--tile);
+  -webkit-mask: var(--azul-flower) center / contain no-repeat;
+  mask: var(--azul-flower) center / contain no-repeat;
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-line {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  margin: 0;
+  padding: 0 3px;
+  border-radius: 9999px;
+  background: #fff;
+  color: #14335a;
+  box-shadow: 0 0 0 1.5px var(--tile);
+  font-size: 9.5px;
+  font-weight: 800;
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-glyph {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border-radius: 3px;
+  background: #fff;
+  color: var(--tile);
+  box-shadow: inset 0 0 0 1px var(--tile);
+  font-size: 7px !important;
+  opacity: 1 !important;
+}
+[data-appearance="azulejo"] .vehicle-pin.is-expected {
+  outline: 2px dashed var(--cobalt);
+  outline-offset: 2px;
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-src,
+[data-appearance="azulejo"] .vehicle-pin .unknown-badge {
+  z-index: 1;
+  box-shadow: 0 0 0 2px #fff;
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-src {
+  background: #fff;
+}
+
+/* Stations: diamond tiles. The frame carries the mode colour(s) (--ring), the middle is white glaze. */
+[data-appearance="azulejo"] .station-ring {
+  position: relative;
+  box-sizing: border-box;
+  width: calc(var(--size) * 0.8);
+  height: calc(var(--size) * 0.8);
+  padding: 3px;
+  border-radius: 3px;
+  rotate: 45deg;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  box-shadow: none;
+}
+[data-appearance="azulejo"] .station-core {
+  width: calc(var(--size) * 0.8 - 6px);
+  height: calc(var(--size) * 0.8 - 6px);
+  border-radius: 2px;
+  rotate: 45deg;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgb(20 51 90 / 0.4);
+}
+[data-appearance="azulejo"] .spread-anim .station-core,
+[data-appearance="azulejo"] .station.is-selected .station-core {
+  background: #fff;
+}
+[data-appearance="azulejo"] .station::before {
+  width: calc(var(--size) * 0.8 + 7px);
+  height: calc(var(--size) * 0.8 + 7px);
+  border-radius: 3px;
+  border-color: var(--cobalt);
+  box-shadow: 0 0 0 1.5px #fff, 0 0 8px rgb(29 79 143 / 0.35);
+  rotate: 45deg;
+}
+/* Area point: a 2 × 2 cobalt-and-white tile, the mode ring and the count on a white centre */
+[data-appearance="azulejo"] .area-point::before {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 3px;
+  background: conic-gradient(var(--cobalt) 25%, #fff 0 50%, var(--cobalt) 0 75%, #fff 0);
+  box-shadow: 0 0 0 1.5px var(--cobalt), 0 1px 2px rgb(20 51 90 / 0.35);
+  opacity: 1;
+  transform: none;
+  rotate: none;
+}
+[data-appearance="azulejo"] .area-point .station-ring {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 9999px;
+  rotate: none;
+  -webkit-mask: radial-gradient(circle, transparent 0 8.5px, #000 9px);
+  -webkit-mask-composite: source-over;
+  mask: radial-gradient(circle, transparent 0 8.5px, #000 9px);
+  box-shadow: 0 0 0 1.5px #fff;
+}
+[data-appearance="azulejo"] .area-point .station-core {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  rotate: none;
+  box-shadow: none;
+}
+[data-appearance="azulejo"] .area-count {
+  z-index: 1;
+  color: var(--cobalt);
+  font-size: 11px;
+}
+
+/* Badges and labels: small white tiles edged in cobalt; the selected one is filled cobalt */
+[data-appearance="azulejo"] .station-letter,
+[data-appearance="azulejo"] .area-row-letter {
+  border-radius: 3px;
+  background: #fff;
+  color: var(--cobalt);
+  box-shadow: inset 0 0 0 1.5px var(--cobalt);
+}
+[data-appearance="azulejo"] .station.is-selected .station-letter,
+[data-appearance="azulejo"] .area-row.is-on .area-row-letter {
+  background: var(--cobalt);
+  color: #fff;
+}
+[data-appearance="azulejo"] .station-label {
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.95);
+  color: #14335a;
+  box-shadow: 0 0 0 1px rgb(29 79 143 / 0.3);
+}
+[data-appearance="azulejo"] .station.is-selected .station-label {
+  background: var(--cobalt);
+  color: #fff;
+}
+[data-appearance="azulejo"] .station-dir,
+[data-appearance="azulejo"] .upcoming-eta {
+  border-radius: 3px;
+  background: var(--cobalt);
+  color: #fff;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+[data-appearance="azulejo"] .route-stop .upcoming-eta {
+  background: var(--line);
+  color: var(--line-text);
+}
+[data-appearance="azulejo"] .upcoming-stop {
+  background: var(--cobalt);
+  border-color: #fff;
+}
+[data-appearance="azulejo"] .spread-disc {
+  background: radial-gradient(circle closest-side, rgb(255 255 255 / 0.7) 0 72%, rgb(255 255 255 / 0) 100%);
+}

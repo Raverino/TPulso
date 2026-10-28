@@ -36,6 +36,7 @@ import { activeTrips, departuresAtStop, expectedVehicles, isExpired, positionsAt
 import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
 import { useTimetable } from "@/offline/useTimetable";
 import { clockNow, setSimClock, useClock } from "@/lib/clock";
+import { setAppearance, useAppearance } from "@/appearance";
 import { areaSelect, NO_SELECTION, pickedOf, type AreaSelection } from "@/lib/areaSelection";
 import { MODE_COLORS, MODE_TEXT } from "@/config";
 
@@ -797,7 +798,7 @@ export default function App() {
   return (
     <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-background">
       {/* Compact top bar */}
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2">
+      <header className="app-header flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2">
         <span className="grid size-7 place-items-center rounded-xl bg-primary text-primary-foreground">
           <Radar className="size-3.5" />
         </span>
@@ -845,6 +846,7 @@ export default function App() {
         </div>
 
         <Clock />
+        <AppearanceSwitch />
         <div className="flex gap-0.5">
           <button
             onClick={() => openPanel("help")}
@@ -1095,6 +1097,29 @@ export default function App() {
     </main>
   );
 }
+
+/** TPulso: the appearance slide switch (Standard ↔ Azulejo), remembered on this device. */
+const AppearanceSwitch = memo(function AppearanceSwitch() {
+  const appearance = useAppearance();
+  const on = appearance === "azulejo";
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label="Azulejo appearance"
+      title={on ? "Switch to Standard" : "Switch to Azulejo (light, Portuguese tiles)"}
+      onClick={() => setAppearance(on ? "standard" : "azulejo")}
+      className="appearance-switch flex items-center gap-1.5 rounded-lg px-1 py-1 text-[11px] font-semibold"
+    >
+      <span className={on ? "text-muted-foreground" : "text-foreground"}>Standard</span>
+      <span className={`appearance-track${on ? " is-on" : ""}`} aria-hidden="true">
+        <span className="appearance-knob" />
+      </span>
+      <span className={on ? "text-foreground" : "text-muted-foreground"}>Azulejo</span>
+    </button>
+  );
+});
 
 /** TPulso: the only part of the app that re-renders every second (it reads the shared clock itself). */
 const Clock = memo(function Clock() {
