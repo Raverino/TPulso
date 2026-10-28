@@ -456,6 +456,26 @@ export default function App() {
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   // Phones: the departures panel raised over part of the radar (scroll its list, or tap its grab bar).
   const [sheetUp, setSheetUp] = useState(false);
+  // How far the raised panel travels: over the whole map and legend, up to the top bar.
+  const mapSlotRef = useRef<HTMLDivElement>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const [raiseBy, setRaiseBy] = useState(0);
+  // Phones only (below Tailwind's md): wide screens show the panel beside the map.
+  const [narrow, setNarrow] = useState(() => typeof matchMedia === "function" && matchMedia("(max-width: 767.98px)").matches);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia("(max-width: 767.98px)");
+    const on = () => {
+      setNarrow(mq.matches);
+      if (!mq.matches) setSheetUp(false);
+    };
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const onSheet = useCallback((up: boolean) => {
+    if (up) setRaiseBy((mapSlotRef.current?.offsetHeight ?? 0) + (legendRef.current?.offsetHeight ?? 0));
+    setSheetUp(up);
+  }, []);
   // Each vehicle opens with the panel down.
   useEffect(() => setSheetUp(false), [selectedId]);
   const exitRide = useCallback(() => {
@@ -1054,7 +1074,7 @@ export default function App() {
 
       {/* Radar left, departures right (stacked on narrow phones) */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <div className={`map-slot relative isolate h-[56%] shrink-0 overflow-hidden md:h-auto md:flex-1 ${vehiclePanelUp ? "is-covered" : ""}`}>
+        <div ref={mapSlotRef} className={`map-slot relative isolate h-[56%] shrink-0 overflow-hidden md:h-auto md:flex-1 ${vehiclePanelUp ? "is-covered" : ""}`}>
           <Suspense
             fallback={
               <div className="grid h-full place-items-center text-muted-foreground">
@@ -1158,12 +1178,13 @@ export default function App() {
           )}
         </div>
         {/* Phones: the legend sits under the radar, never over it. */}
-        <div className="shrink-0 md:hidden">
+        <div ref={legendRef} className={`map-slot-legend shrink-0 md:hidden ${vehiclePanelUp ? "is-covered" : ""}`}>
           <Legend variant="strip" alerts={!!alertsView?.current.length} />
         </div>
         <ArrivalsDrawer
           sheetUp={vehiclePanelUp}
-          onSheet={vehicleView ? setSheetUp : undefined}
+          raiseBy={raiseBy}
+          onSheet={vehicleView && narrow ? onSheet : undefined}
           arrivals={arrivals}
           radius={radius}
           vehicle={selected}

@@ -941,30 +941,37 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   }
 }
 
-/* Phones, vehicle panel: raised over the lower part of the map (it slides; the map is never resized). While it
-   is up, the compass and bezel fade out, so the visible part of the map stays clean. */
+/* Phones, vehicle panel: raised, it slides up over the map and legend and stops under the top bar (the map is
+   never resized). Meanwhile the map and legend fade out; the "Map" button brings them back. */
 .sheet-raise {
-  transition: margin-top 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: margin-top 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.map-slot .compass,
-.map-slot .sonar-bezel,
-.map-slot .sonar-ticks {
-  transition: opacity 260ms ease-out;
+.map-slot,
+.map-slot-legend {
+  transition: opacity 300ms ease-out;
 }
-.map-slot.is-covered .compass,
-.map-slot.is-covered .sonar-bezel,
-.map-slot.is-covered .sonar-ticks {
+.map-slot.is-covered,
+.map-slot-legend.is-covered {
   opacity: 0;
-}
-.map-slot.is-covered .compass-letter {
   pointer-events: none;
+}
+.sheet-map-btn {
+  animation: sheet-map-btn-in 220ms 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes sheet-map-btn-in {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .sheet-raise,
-  .map-slot .compass,
-  .map-slot .sonar-bezel,
-  .map-slot .sonar-ticks {
+  .map-slot,
+  .map-slot-legend {
     transition: none;
+  }
+  .sheet-map-btn {
+    animation: none;
   }
 }
 .sheet-handle > span {

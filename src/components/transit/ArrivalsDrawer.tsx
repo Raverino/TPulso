@@ -6,9 +6,10 @@ import {
   Bus,
   CircleHelp,
   Download,
+  Flag,
   Footprints,
-  Gauge,
   ListOrdered,
+  Map as MapIcon,
   MapPin,
   Pin,
   PinOff,
@@ -143,8 +144,10 @@ interface Props {
   /** Alerts on the selected vehicle's line. */
   vehicleAlerts?: ServiceAlert[];
   onShowAlerts?: (() => void) | undefined;
-  /** TPulso, phones: the panel is raised over part of the map (more room for the list). */
+  /** TPulso, phones: the panel is raised over the map, up to the top bar (more room for the list). */
   sheetUp?: boolean;
+  /** How far it travels when raised (px): the height of the map and legend. */
+  raiseBy?: number;
   onSheet?: ((up: boolean) => void) | undefined;
 }
 
@@ -223,6 +226,7 @@ export default function ArrivalsDrawer({
   vehicleAlerts = [],
   onShowAlerts,
   sheetUp = false,
+  raiseBy = 0,
   onSheet,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
@@ -273,22 +277,34 @@ export default function ArrivalsDrawer({
 
   return (
     <aside
-      className={`sheet-raise relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l ${
-        sheetUp ? "rounded-t-2xl shadow-float max-md:-mt-[30dvh]" : ""
-      }`}
+      className="sheet-raise relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l"
+      // Raised: slides up over the map and legend and stops under the top bar (App fades the map meanwhile).
+      style={sheetUp ? { marginTop: -raiseBy } : undefined}
       onTouchStart={onSheet ? onTouchStart : undefined}
       onTouchMove={onSheet ? onTouchMove : undefined}
       onWheel={onSheet ? onWheel : undefined}
     >
-      {onSheet && (
+      {onSheet && !sheetUp && (
         <button
           type="button"
-          onClick={() => onSheet(!sheetUp)}
-          aria-label={sheetUp ? "Show more of the map" : "Show more of the list"}
-          aria-expanded={sheetUp}
+          onClick={() => onSheet(true)}
+          aria-label="Show more of the list"
+          aria-expanded={false}
           className="sheet-handle grid h-4 w-full shrink-0 place-items-center bg-surface md:hidden"
         >
           <span aria-hidden />
+        </button>
+      )}
+      {/* Raised: a button on the right brings the map back. */}
+      {onSheet && sheetUp && (
+        <button
+          type="button"
+          onClick={() => onSheet(false)}
+          aria-label="Back to the map"
+          aria-expanded
+          className="sheet-map-btn absolute right-3 top-2 z-20 flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 font-display text-xs font-bold text-primary-foreground shadow-float active:scale-95 md:hidden"
+        >
+          <MapIcon className="size-3.5" /> Map
         </button>
       )}
       {/* TPulso: the detail panel slides and fades over the list (transform + opacity only, 220 ms; instant with
@@ -762,6 +778,10 @@ function VehicleDetails({
   onShowAlerts?: (() => void) | undefined;
 }) {
   const Icon = ICONS[v.mode];
+  // The remaining stops of this trip in route order (inside and outside the radar together).
+  const rest = [...upcoming, ...beyond].sort((a, b) => a.aheadM - b.aheadM);
+  const nextStop = rest[0];
+  const lastStop = rest.length > 1 ? rest[rest.length - 1] : undefined;
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
@@ -799,23 +819,10 @@ function VehicleDetails({
           </div>
         </div>
       )}
+      {/* TPulso: where this vehicle goes next and when it reaches the end of its line (timetable times). */}
       <div className="grid grid-cols-2 gap-2 px-3 pb-3">
-        <div className="rounded-xl bg-surface-2/70 px-3 py-2">
-          <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-            <Gauge className="size-3" /> Position
-          </div>
-          <div className="flex items-center gap-1.5 font-display text-sm font-bold">
-            <SourceDot state="expected" /> Expected
-          </div>
-          <div className="text-[10px] text-muted-foreground">calculated from the timetable</div>
-        </div>
-        <div className="rounded-xl bg-surface-2/70 px-3 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Times</div>
-          <div className="flex items-center gap-1.5 font-display text-sm font-bold">
-            <SourceDot state="scheduled" /> Scheduled
-          </div>
-          <div className="text-[10px] text-muted-foreground">not live: delays are not known</div>
-        </div>
+        <TripCard title="Next stop" icon={MapPin} stop={nextStop} now={now} routeStatus={routeStatus} />
+        <TripCard title="End of line" icon={Flag} stop={lastStop} now={now} routeStatus={routeStatus} />
       </div>
 
       {/* TPulso: TEST mode only — ride this vehicle (simulated from the timetable) */}
@@ -847,6 +854,46 @@ function VehicleDetails({
         />
       </div>
     </>
+  );
+}
+
+/** TPulso: one stop of the selected trip with its scheduled countdown and clock time (Lisbon). */
+function TripCard({
+  title,
+  icon: CardIcon,
+  stop,
+  now,
+  routeStatus,
+}: {
+  title: string;
+  icon: typeof MapPin;
+  stop: UpcomingStop | undefined;
+  now: number;
+  routeStatus: Props["routeStatus"];
+}) {
+  const nowSec = Math.floor(now / 1000);
+  return (
+    <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <CardIcon className="size-3" /> {title}
+      </div>
+      {stop ? (
+        <>
+          <div className="truncate font-display text-sm font-bold" title={stop.name}>
+            {stop.name}
+          </div>
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <SourceDot state={stop.state} />
+            <span className="font-bold text-foreground">
+              <Countdown atSec={nowSec + stop.etaS} state={stop.state} />
+            </span>
+            · {clock((nowSec + stop.etaS) * 1000)}
+          </div>
+        </>
+      ) : (
+        <div className="text-[11px] text-muted-foreground">{routeStatus === "loading" ? "Loading…" : "Not known"}</div>
+      )}
+    </div>
   );
 }
 

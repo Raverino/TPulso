@@ -5,6 +5,7 @@ import "@/lib/leafletGlobal";
 import "leaflet-rotate";
 import "@/lib/leafletRotateSetup";
 import { GLIDE_MIN_V, glideStep, normDeg, pointerAngle, releaseVelocity, settleBearing, type BearingSample } from "@/lib/rotation";
+import { declutter } from "@/lib/declutter";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -594,24 +595,19 @@ function VehicleAnimator({
       if (!f.keys) shownList = shownList.filter((x) => x.d <= margin || x.v.key === ride);
       // Cap the DOM markers: the nearest ones (the ridden one always) when a busy area has too many.
       if (shownList.length > MAX_VEHICLE_MARKERS) shownList = shownList.sort((a, b) => (a.v.key === ride ? -1 : b.v.key === ride ? 1 : a.d - b.d)).slice(0, MAX_VEHICLE_MARKERS);
-      // Vehicles on exactly the same spot (e.g. two Metro trains at one platform pair, a bus listed at the same
-      // stop as another) would hide each other: fan them out by 11 px around that spot. Count unchanged; the
-      // ridden vehicle is never moved (the camera follows it).
-      const spot = new Map<string, number[]>();
+      // Pins that would cover each other (two buses at one stop, Metro trains at a platform pair) are pushed
+      // apart on screen until they barely touch (src/lib/declutter.ts). These are Expected positions from the
+      // timetable, so a few pixels of offset are harmless. Count unchanged; the ridden vehicle is never moved
+      // (the camera follows it). Recomputed every update from the true positions, so pins slide apart smoothly.
       const pts = shownList.map(({ v }) => map.latLngToLayerPoint([v.lat, v.lng]));
-      pts.forEach((p, i) => {
-        if (shownList[i]!.v.key === ride) return;
-        const k = `${Math.round(p.x / 3)}|${Math.round(p.y / 3)}`;
-        spot.set(k, [...(spot.get(k) ?? []), i]);
-      });
+      const spread = declutter(
+        pts.map((p, i) => ({ key: shownList[i]!.v.key, x: p.x, y: p.y, fixed: shownList[i]!.v.key === ride })),
+        VEHICLE_MIN_GAP_PX,
+      );
       const fanned = new Map<number, L.LatLng>();
-      for (const idx of spot.values()) {
-        if (idx.length < 2) continue;
-        idx.forEach((i, j) => {
-          const a = -Math.PI / 2 + (2 * Math.PI * j) / idx.length;
-          fanned.set(i, map.layerPointToLatLng(pts[i]!.add([Math.cos(a) * VEHICLE_FAN_PX, Math.sin(a) * VEHICLE_FAN_PX])));
-        });
-      }
+      spread.forEach((q, i) => {
+        if (Math.abs(q.x - pts[i]!.x) + Math.abs(q.y - pts[i]!.y) > 0.25) fanned.set(i, map.layerPointToLatLng([q.x, q.y]));
+      });
       const seen = new Set<string>();
       for (const [index, { v }] of shownList.entries()) {
         const at = fanned.get(index) ?? L.latLng(v.lat, v.lng);
@@ -671,8 +667,8 @@ function VehicleAnimator({
   return null;
 }
 
-/** Vehicles on the same spot are fanned out this far (px) so none is hidden. */
-const VEHICLE_FAN_PX = 11;
+/** Vehicle pins (31 px plus the dashed Expected outline) are kept at least this far apart, centre to centre. */
+const VEHICLE_MIN_GAP_PX = 34;
 /** At most this many vehicle markers in the DOM (the nearest to the radar centre). */
 const MAX_VEHICLE_MARKERS = 60;
 
