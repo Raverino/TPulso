@@ -50,7 +50,7 @@ self.addEventListener('fetch', (e) => {
     if (url.pathname === '/data/current.json') return e.respondWith(staleWhileRevalidate(e, new Request('/data/current.json'), SHELL));
     const m = url.pathname.match(/^\/data\/([^/]+)\//);
     if (m) return e.respondWith(cacheFirst(e.request, DATA_PREFIX + m[1]));
-    if (url.pathname.startsWith('/api/')) return; // live API (switched off) is never cached
+    if (url.pathname.startsWith('/api/')) return; // API (service alerts; live API, switched off) is never cached: always fresh or honestly missing
     if (e.request.mode === 'navigate') return e.respondWith(staleWhileRevalidate(e, new Request('/'), SHELL));
     return e.respondWith(cacheFirst(e.request, SHELL));
   }

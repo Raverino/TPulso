@@ -1425,3 +1425,54 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 [data-appearance="azulejo"] .spread-disc {
   background: radial-gradient(circle closest-side, rgb(255 255 255 / 0.7) 0 72%, rgb(255 255 255 / 0) 100%);
 }
+
+/* --- TPulso: service alerts (docs/ALERTS.md) ------------------------------------------------------------------
+ * Amber, never a mode colour, and always with the warning triangle and words (never colour alone). */
+:root {
+  --alert-bg: #fac775;
+  --alert-fg: #633806;
+  --alert-line: #ef9f27;
+  --alert-text: #fac775;
+}
+:root[data-appearance="azulejo"] {
+  --alert-bg: #fde3ad;
+  --alert-fg: #6b3a00;
+  --alert-line: #d98a12;
+  --alert-text: #9a5300;
+}
+.alert-chip {
+  background: var(--alert-bg);
+  color: var(--alert-fg);
+  min-height: 28px;
+}
+.alert-text {
+  color: var(--alert-text);
+}
+.alert-box {
+  background: color-mix(in oklch, var(--alert-bg) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--alert-line) 55%, transparent);
+  color: var(--foreground);
+}
+.alert-box > span:first-child {
+  color: var(--alert-text);
+}
+.alert-item {
+  border-left: 2px solid var(--alert-line);
+}
+/* On a vehicle pin: top right, like the original's "?" badge corner. */
+.vehicle-pin .pin-alert {
+  position: absolute;
+  top: -9px;
+  right: -13px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px;
+  border-radius: 9999px;
+  background: var(--alert-bg);
+  color: var(--alert-fg);
+  font: 800 8px/12px var(--font-sans), sans-serif;
+  box-shadow: 0 0 0 1.5px var(--background);
+  pointer-events: none;
+}

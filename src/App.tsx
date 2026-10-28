@@ -3,7 +3,7 @@
 // (docs/OFFLINE.md) — Scheduled departures and Expected vehicle positions. No live API is called
 // (the live code is kept behind LIVE_ENABLED, off). Every TPulso change is marked "TPulso:".
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront } from "lucide-react";
+import { Bus, CircleHelp, Crosshair, Layers, LoaderCircle, Radar, Ship, TrainFront, TramFront, TriangleAlert } from "lucide-react";
 
 import ArrivalsDrawer, { type HelpInfo, type StopPanel, type TripStopsView } from "@/components/transit/ArrivalsDrawer";
 import type { MapStation, RouteStopMarker } from "@/components/transit/TransitMap";
@@ -39,6 +39,10 @@ import { clockNow, setSimClock, useClock } from "@/lib/clock";
 import { setAppearance, useAppearance } from "@/appearance";
 import { areaSelect, NO_SELECTION, pickedOf, type AreaSelection } from "@/lib/areaSelection";
 import { MODE_COLORS, MODE_TEXT } from "@/config";
+import type { ServiceAlert } from "../shared/alerts";
+import { alertsHere, buildAlertIndex } from "@/offline/alerts";
+import { useAlerts } from "@/lib/useAlerts";
+import type { AlertCard, AlertsView } from "@/components/transit/AlertsPanel";
 
 const TransitMap = lazy(() => import("@/components/transit/TransitMap"));
 
@@ -364,6 +368,29 @@ export default function App() {
     }
   }, []);
 
+  // TPulso: service alerts (docs/ALERTS.md), linked by key: each pattern's line id, the stop id, the operator's
+  // agency ids. A trip key starts with its pattern id ("<pattern>:<trip>:<date>").
+  const alertsState = useAlerts();
+  const patternInfo = useMemo(() => {
+    const m = new Map<number, { lineId: string | undefined; line: string; op: string }>();
+    const add = (p: { id: number; lineId?: string; line: string; op: string }) => m.has(p.id) || m.set(p.id, { lineId: p.lineId, line: p.line, op: p.op });
+    for (const a of tt.areas) for (const p of a.patterns) add(p);
+    if (rideRoute) add(rideRoute);
+    return m;
+  }, [tt.areas, rideRoute]);
+  const alertMinute = Math.floor(now / 60_000) * 60_000;
+  const alertList = alertsState.list?.alerts;
+  const alertIdx = useMemo(() => buildAlertIndex(alertList ?? [], alertMinute), [alertList, alertMinute]);
+  /** "Line alert · Metro de Lisboa" for a departure with an alert in force, else undefined. */
+  const alertLabelFor = useCallback(
+    (d: { vehicleKey: string; stopArea: string; operator: string }) => {
+      if (!alertList?.length) return undefined;
+      const hit = alertIdx.forDeparture(patternInfo.get(Number(d.vehicleKey.split(":")[0]))?.lineId, d.stopArea);
+      return hit ? `${hit.kind === "line" ? "Line alert" : "Stop alert"} · ${d.operator}` : undefined;
+    },
+    [alertList, alertIdx, patternInfo],
+  );
+
   // Departures inside the radar, leaving within 10 minutes, soonest first (as in the original).
   const arrivals = useMemo(() => {
     if (!board) return [];
@@ -394,10 +421,11 @@ export default function App() {
         realtime: false,
         cancelled: false,
         ...(v ? { vehicleId: v.id } : {}),
+        alert: alertLabelFor(d),
       });
     }
     return out.sort((a, b) => (a.etaSec ?? 0) - (b.etaSec ?? 0)).slice(0, 30);
-  }, [board, vehicleByKey, radius, filter, now]);
+  }, [board, vehicleByKey, radius, filter, now, alertLabelFor]);
 
   // The followed connection: its scheduled departure at your stop + where its vehicle is expected now.
   const followed = useMemo(() => {
@@ -424,7 +452,7 @@ export default function App() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [panelView, setPanelView] = useState<"results" | "help" | "stop" | "area">("results");
+  const [panelView, setPanelView] = useState<"results" | "help" | "stop" | "area" | "alerts">("results");
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const exitRide = useCallback(() => {
     setRide(null);
@@ -444,7 +472,7 @@ export default function App() {
     setOpenId(null);
     pin(null);
   }, [pin]);
-  const openPanel = useCallback((view: "help") => {
+  const openPanel = useCallback((view: "help" | "alerts") => {
     setSelectedId(null);
     setOpenId(null);
     setAreaCloseRequest((n) => n + 1);
@@ -479,7 +507,9 @@ export default function App() {
       : filterByMode(
           members.flatMap((m) => departuresAtStop(manifest, tt.areas, m.id, now - 30_000, now + WINDOW_MS).map((d) => toLive(d, m))),
           filter,
-        ).sort((a, b) => a.expectedAt - b.expectedAt);
+        )
+          .sort((a, b) => a.expectedAt - b.expectedAt)
+          .map((d) => ({ ...d, alert: alertLabelFor(d) }));
     // One distance everywhere: from the radar centre to the marker (the platform's position), as in the list.
     const distanceM = Math.round(distanceMeters(center, tappedStation));
     return {
@@ -493,7 +523,7 @@ export default function App() {
       fetchedAt: now,
       error: null,
     };
-  }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive, filter]);
+  }, [tappedStation, allStops, center, manifest, expired, tt.areas, now, toLive, filter, alertLabelFor]);
   // The picked platform's next departures, shown in its expanded row of the station list.
   const pickedDepartures: LiveDeparture[] | null = useMemo(() => {
     if (!pickedId || !manifest) return null;
@@ -680,6 +710,57 @@ export default function App() {
   const baseLines = useMemo(() => (filter === "all" ? allBaseLines : allBaseLines.filter((l) => l.mode === filter)), [allBaseLines, filter]);
   const selectedRoute = selected ? routes.get(`full|${selected.routeId}`) : undefined;
 
+  // Vehicle pins: the patterns whose line has an alert in force.
+  const alertPatterns = useMemo(() => {
+    const out = new Set<number>();
+    if (alertList?.length) for (const [id, p] of patternInfo) if (alertIdx.forLine(p.lineId).length) out.add(id);
+    return out;
+  }, [alertList, alertIdx, patternInfo]);
+  const agenciesOf = useMemo(() => new Map((manifest?.operators ?? []).map((o) => [o.id, o.agencies ?? []])), [manifest]);
+  const alertsView: AlertsView | null = useMemo(() => {
+    if (alertsState.status === "off") return null;
+    const deps = (board ?? []).filter((d) => d.distanceM <= radius && (filter === "all" || d.mode === filter));
+    const here = alertsHere(
+      alertList ?? [],
+      {
+        departures: deps.map((d) => ({ lineId: patternInfo.get(Number(d.vehicleKey.split(":")[0]))?.lineId, stopId: d.stopArea, op: patternInfo.get(Number(d.vehicleKey.split(":")[0]))?.op ?? "" })),
+        vehicles: radarVehicles.map((v) => ({ lineId: patternInfo.get(Number(v.routeId))?.lineId, op: patternInfo.get(Number(v.routeId))?.op ?? "" })),
+        agenciesOf,
+      },
+      alertMinute,
+    );
+    // Names by key, never ids: operator of the agency, line numbers of the line ids, stop names of the stop ids.
+    const opOfAgency = new Map((manifest?.operators ?? []).flatMap((o) => (o.agencies ?? []).map((a) => [a, o.name] as const)));
+    const lineName = new Map<string, string>();
+    for (const p of patternInfo.values()) if (p.lineId) lineName.set(p.lineId, p.line);
+    const stopName = new Map(allStops.map((s) => [s.id, s.name]));
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+    const card = (a: ServiceAlert): AlertCard => {
+      let affected = "Whole operator";
+      if (a.scope === "lines") {
+        const known = [...new Set(a.lines.map((l) => lineName.get(l.lineId)).filter((x): x is string => !!x))];
+        const rest = a.lines.length - known.length;
+        const stops = new Set(a.lines.flatMap((l) => l.stopIds)).size;
+        affected = known.length
+          ? `${known.length === 1 ? "Line" : "Lines"} ${known.slice(0, 6).join(", ")}${known.length > 6 || rest > 0 ? ` and ${plural(rest + Math.max(0, known.length - 6), "more line")}` : ""}`
+          : plural(a.lines.length, "line");
+        if (stops) affected += ` · ${plural(stops, "stop")}`;
+      } else if (a.scope === "stops") {
+        const names = [...new Set(a.stops.map((s) => stopName.get(s.stopId)).filter((x): x is string => !!x))];
+        affected = names.length ? `${names.length === 1 ? "Stop" : "Stops"}: ${names.slice(0, 3).join(", ")}${a.stops.length > 3 ? "…" : ""}` : plural(a.stops.length, "stop");
+      }
+      return { alert: a, operator: opOfAgency.get(a.agencyId) ?? "Operator", affected };
+    };
+    return {
+      status: alertsState.status === "loading" ? "loading" : alertsState.status === "error" ? "error" : "ok",
+      current: here.current.map(card),
+      announced: here.announced.map(card),
+      sources: alertsState.list?.sources ?? [],
+      receivedAt: alertsState.receivedAt,
+    };
+  }, [alertsState, alertList, board, radius, filter, radarVehicles, patternInfo, agenciesOf, alertMinute, manifest, allStops]);
+  const selectedAlerts = useMemo(() => (selected ? alertIdx.forLine(patternInfo.get(Number(selected.routeId))?.lineId) : []), [selected, alertIdx, patternInfo]);
+
   const { upcoming, beyond } = useMemo(() => {
     const none = { upcoming: [] as UpcomingStop[], beyond: [] as UpcomingStop[] };
     const r = routeFile.route;
@@ -847,6 +928,17 @@ export default function App() {
 
         <Clock />
         <AppearanceSwitch />
+        {alertsView && (alertsView.current.length > 0 || (alertsView.status === "error" && !alertsView.receivedAt)) && (
+          <button
+            type="button"
+            onClick={() => openPanel("alerts")}
+            aria-label={alertsView.current.length ? `${alertsView.current.length} service alerts here` : "Service alerts unavailable"}
+            className={`flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold ${alertsView.current.length ? "alert-chip" : "border border-border bg-surface-2 text-muted-foreground"}`}
+          >
+            <TriangleAlert className="size-3" aria-hidden />
+            {alertsView.current.length ? `${alertsView.current.length} alert${alertsView.current.length === 1 ? "" : "s"}` : "Alerts unavailable"}
+          </button>
+        )}
         <div className="flex gap-0.5">
           <button
             onClick={() => openPanel("help")}
@@ -958,6 +1050,7 @@ export default function App() {
                 onArea={onArea}
                 areaCloseRequest={areaCloseRequest}
                 baseLines={baseLines}
+                alertPatterns={alertPatterns}
                 onSelect={onMapSelect}
               />
             ) : (
@@ -968,7 +1061,7 @@ export default function App() {
           </Suspense>
           {/* TPulso: legend of the timetable states + "Timetable data, not live" */}
           <div className="pointer-events-none absolute bottom-6 left-2 z-[470]">
-            <Legend />
+            <Legend alerts={!!alertsView?.current.length} />
           </div>
           {expired && !showOverlay && (
             <div className="absolute inset-x-0 top-10 z-[490] mx-auto w-fit rounded-xl border border-destructive/50 bg-surface px-3 py-2 text-center text-xs shadow-float">
@@ -1070,6 +1163,9 @@ export default function App() {
           onSelectStop={selectStop}
           routeStatus={routeFile.status}
           help={help}
+          alerts={alertsView}
+          vehicleAlerts={selectedAlerts}
+          onShowAlerts={alertsView ? () => openPanel("alerts") : undefined}
           tripStops={tripStops}
           onToggleTrip={toggleTrip}
           onRide={gps === "denied" && !ride ? startRide : undefined}

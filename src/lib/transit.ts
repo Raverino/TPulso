@@ -76,6 +76,8 @@ export interface Arrival {
   realtime?: boolean;
   cancelled?: boolean;
   skipped?: boolean;
+  /** TPulso: "Line alert · Metro de Lisboa" when a service alert concerns this departure. */
+  alert?: string | undefined;
 }
 
 /** A departure as delivered by the board (here: mapped from /api/board). */
@@ -98,6 +100,8 @@ export interface LiveDeparture {
   cancelled: boolean;
   /** Trip still runs, but doesn't call at this stop. */
   skipped?: boolean;
+  /** TPulso: "Line alert · Metro de Lisboa" when a service alert concerns this departure. */
+  alert?: string | undefined;
 }
 
 /** The connection the user follows. */

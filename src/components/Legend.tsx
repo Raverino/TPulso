@@ -1,4 +1,4 @@
-import { Bus, Ship, TrainFront, TramFront } from 'lucide-react';
+import { Bus, Ship, TrainFront, TramFront, TriangleAlert } from 'lucide-react';
 import { MODE_COLORS } from '@/config';
 import { SourceDot } from './SourceDot';
 
@@ -9,8 +9,8 @@ const MODES = [
   { key: 'ferry', label: 'Ferry', icon: Ship },
 ] as const;
 
-/** Explains the two timetable states (CLAUDE.md display rule, offline version). */
-export function Legend() {
+/** Explains the two timetable states (CLAUDE.md display rule, offline version), and the alert badge when alerts are on. */
+export function Legend({ alerts = false }: { alerts?: boolean }) {
   return (
     <ul
       className="space-y-0.5 rounded-xl border border-border bg-surface/90 px-2 py-1.5 text-[10px] leading-tight text-foreground/85 shadow-float backdrop-blur-sm"
@@ -37,6 +37,14 @@ export function Legend() {
           <b>Expected</b> · vehicle position from the timetable
         </span>
       </li>
+      {alerts && (
+        <li className="flex items-center gap-1.5">
+          <TriangleAlert className="alert-text size-3" aria-hidden />
+          <span>
+            <b>Alert</b> · service alert on the line or stop
+          </span>
+        </li>
+      )}
     </ul>
   );
 }

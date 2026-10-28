@@ -33,6 +33,8 @@ import {
 import { SourceDot } from "@/components/SourceDot";
 import { agoLabel, countdownLabel, SOURCE_TEXT, type SourceState } from "@/lib/sourceStatus";
 import type { OperatorInfo } from "../../../shared/timetable";
+import type { ServiceAlert } from "../../../shared/alerts";
+import { AlertNote, AlertsPanel, VehicleAlerts, type AlertsView } from "./AlertsPanel";
 
 const ICONS: Record<TransportMode, typeof Bus> = {
   bus: Bus,
@@ -111,7 +113,7 @@ interface Props {
   openId?: string | null;
   radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number }[];
   onOpen?: (id: string | null) => void;
-  panelView?: "results" | "help" | "stop" | "area";
+  panelView?: "results" | "help" | "stop" | "area" | "alerts";
   /** Expanded area point: its stations (letter order), the picked one, and a row tap (pick, then open). */
   area?: AreaRow[] | null;
   pickedId?: string | null;
@@ -136,6 +138,11 @@ interface Props {
   onToggleTrip?: (rowId: string) => void;
   /** Select another stop (a platform's "Other side" link). */
   onSelectStop?: (id: string) => void;
+  /** TPulso: service alerts for the radar (null = alerts switched off on the server). */
+  alerts?: AlertsView | null;
+  /** Alerts on the selected vehicle's line. */
+  vehicleAlerts?: ServiceAlert[];
+  onShowAlerts?: (() => void) | undefined;
 }
 
 /** TPulso: a departure row's trip, expanded: its upcoming stops (same data as the vehicle panel). */
@@ -209,6 +216,9 @@ export default function ArrivalsDrawer({
   pickedId = null,
   onPickRow,
   pickedDepartures = null,
+  alerts = null,
+  vehicleAlerts = [],
+  onShowAlerts,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -369,6 +379,7 @@ export default function ArrivalsDrawer({
                                     {MODE_LABEL[a.mode]}
                                   </span>
                                 </div>
+                                {a.alert && <AlertNote label={a.alert} onOpen={onShowAlerts} />}
                               </div>
                               <div className="shrink-0 text-right">
                                 {/* TPulso: source dot + "3 min" (Live) / "~3 min" (Scheduled, Stale) */}
@@ -445,8 +456,10 @@ export default function ArrivalsDrawer({
             <AreaList rows={area} pickedId={pickedId ?? null} departures={pickedDepartures} onPick={onPickRow} onClose={onPanelClose} />
           ) : panelView === "help" ? (
             <HelpPanel onClose={onPanelClose} info={help} />
+          ) : panelView === "alerts" && alerts ? (
+            <AlertsPanel view={alerts} now={now} onClose={onPanelClose} />
           ) : panelView === "stop" && (stop ?? lastStop.current) ? (
-            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} onSelectStop={onSelectStop} />
+            <StopDetails s={(stop ?? lastStop.current)!} now={now} onClose={onPanelClose} tripStops={tripStops} onToggleTrip={onToggleTrip} onSelectStop={onSelectStop} onShowAlerts={onShowAlerts} />
           ) : back ? (
             <VehicleDetails
               v={back.v}
@@ -457,6 +470,8 @@ export default function ArrivalsDrawer({
               now={now}
               routeStatus={routeStatus}
               onRide={onRide}
+              alerts={vehicleAlerts}
+              onShowAlerts={onShowAlerts}
             />
           ) : null}
           </div>
@@ -602,6 +617,16 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
           <HelpRow icon={<SourceDot state="expected" />} title="Expected" text="Where a vehicle should be now according to the timetable (dashed outline). Real vehicles can be early, late or cancelled." />
         </HelpSection>
 
+        <HelpSection title="Service alerts">
+          <p>
+            When an operator publishes a service alert (works, detours, strikes, a station entrance closed…), the departures and vehicles it
+            concerns show <strong className="alert-text">⚠ Line alert</strong> or <strong className="alert-text">⚠ Stop alert</strong>, and the
+            top bar shows how many alerts concern your radar. Tap either to read them. Alerts come from TML (all operators) and from
+            Transtejo/Soflusa's notices, in Portuguese as published, and need a connection. The times shown are still the timetable: they do not
+            include these changes.
+          </p>
+        </HelpSection>
+
         <HelpSection title="Timetables in this version">
           <p>Valid {info.window}. Source: TML regional GTFS feed.</p>
           <ul className="space-y-1">
@@ -670,6 +695,8 @@ function VehicleDetails({
   now,
   routeStatus,
   onRide,
+  alerts = [],
+  onShowAlerts,
 }: {
   v: Vehicle;
   r?: TransitRoute | undefined;
@@ -679,6 +706,8 @@ function VehicleDetails({
   now: number;
   routeStatus: Props["routeStatus"];
   onRide?: (() => void) | undefined;
+  alerts?: ServiceAlert[];
+  onShowAlerts?: (() => void) | undefined;
 }) {
   const Icon = ICONS[v.mode];
   return (
@@ -709,6 +738,7 @@ function VehicleDetails({
         </div>
       </div>
 
+      <VehicleAlerts alerts={alerts} onOpen={onShowAlerts} />
       {isUnknownRoute(v) && (
         <div className="mx-3 mb-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px]">
           <div className="font-display text-xs font-bold text-destructive">(?) Unknown route</div>
@@ -894,6 +924,7 @@ function StopDetails({
   tripStops,
   onToggleTrip,
   onSelectStop,
+  onShowAlerts,
 }: {
   s: StopPanel;
   now: number;
@@ -901,6 +932,7 @@ function StopDetails({
   tripStops: Record<string, TripStopsView>;
   onToggleTrip?: ((rowId: string) => void) | undefined;
   onSelectStop?: ((id: string) => void) | undefined;
+  onShowAlerts?: (() => void) | undefined;
 }) {
   const ageSec = s.fetchedAt ? (now - s.fetchedAt) / 1000 : 0;
   return (
@@ -957,9 +989,12 @@ function StopDetails({
                   <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${DOT[d.mode]}`}>
                     <Icon className="size-3.5 text-primary-foreground" />
                   </span>
-                  <div className="min-w-0 flex-1 truncate">
-                    <span className="font-display text-xs font-bold">{d.line}</span>{" "}
-                    <span className="text-xs text-foreground/80">{d.destination}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate">
+                      <span className="font-display text-xs font-bold">{d.line}</span>{" "}
+                      <span className="text-xs text-foreground/80">{d.destination}</span>
+                    </div>
+                    {d.alert && <AlertNote label={d.alert} onOpen={onShowAlerts} />}
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="flex items-center justify-end gap-1.5 font-display text-sm font-bold leading-none text-primary">

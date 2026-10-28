@@ -158,11 +158,13 @@ function routeStopIcon(r: RouteStopMarker) {
   });
 }
 
+/** TPulso: the warning triangle of the alert badge (lucide "triangle-alert"). */
+const ALERT_SVG = `<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
 const iconCache = new Map<string, L.DivIcon>();
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
-function vehicleIcon(v: Vehicle) {
+function vehicleIcon(v: Vehicle, alert = false) {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   const icon = L.divIcon({
@@ -176,6 +178,7 @@ function vehicleIcon(v: Vehicle) {
         <span class="pin-glyph" style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
         <span class="pin-line">${esc(v.line)}</span>
         ${unknown ? `<span class="unknown-badge">?</span>` : ""}
+        ${alert ? `<span class="pin-alert" aria-label="Service alert on this line">${ALERT_SVG}Alert</span>` : ""}
       </div>`,
   });
   iconCache.set(key, icon);
@@ -534,6 +537,7 @@ function VehicleAnimator({
   headingUp,
   onSelect,
   operatorName,
+  alertPatterns,
 }: {
   trips: readonly ActiveTrip[];
   clock: () => number;
@@ -544,13 +548,17 @@ function VehicleAnimator({
   headingUp: boolean;
   onSelect: (key: string) => void;
   operatorName: (op: string) => string;
+  /** Patterns whose line has a service alert in force: their pins carry the alert badge. */
+  alertPatterns: ReadonlySet<number>;
 }) {
   const map = useMap();
-  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName });
-  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName };
+  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns });
+  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns };
 
   useEffect(() => {
     const markers = new Map<string, L.Marker>();
+    /** The alert badge each marker was drawn with (an alert appearing or ending swaps the icon in place). */
+    const badged = new Map<string, boolean>();
     let raf = 0;
     let lastTs = -Infinity;
     let prevTs = performance.now();
@@ -617,14 +625,21 @@ function VehicleAnimator({
         }
         seen.add(v.key);
         const m = markers.get(v.key);
-        if (m) m.setLatLng(at);
-        else {
-          const veh: Vehicle = {
-            id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
-            lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
-          };
+        const alert = state.current.alertPatterns.has(v.patternId);
+        const veh = (): Vehicle => ({
+          id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
+          lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
+        });
+        if (m) {
+          m.setLatLng(at);
+          if (badged.get(v.key) !== alert) {
+            m.setIcon(vehicleIcon(veh(), alert));
+            badged.set(v.key, alert);
+          }
+        } else {
+          badged.set(v.key, alert);
           const marker = L.marker(at, {
-            icon: vehicleIcon(veh),
+            icon: vehicleIcon(veh(), alert),
             title: `${v.line} → ${v.headsign || "—"} · Expected position (timetable)`,
             zIndexOffset: v.key === ride ? 1500 : 600,
           });
@@ -637,6 +652,7 @@ function VehicleAnimator({
         if (!seen.has(key)) {
           m.remove();
           markers.delete(key);
+          badged.delete(key);
         }
       }
     };
@@ -866,7 +882,11 @@ interface Props {
   areaCloseRequest: number;
   /** TPulso: tram, metro, train and ferry lines of the region, drawn at every radius. */
   baseLines: TransitRoute[];
+  /** TPulso: patterns whose line has a service alert in force (vehicle pins get the alert badge). */
+  alertPatterns?: ReadonlySet<number>;
 }
+
+const NO_PATTERNS: ReadonlySet<number> = new Set();
 
 function ClearOnMapClick({ onClear }: { onClear: () => void }) {
   const map = useMap();
@@ -1286,6 +1306,7 @@ export default memo(function TransitMap({
   onArea,
   areaCloseRequest,
   baseLines,
+  alertPatterns,
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1460,6 +1481,7 @@ export default memo(function TransitMap({
         headingUp={headingUp}
         onSelect={onSelect}
         operatorName={operatorName}
+        alertPatterns={alertPatterns ?? NO_PATTERNS}
       />
       <SonarGeometry radius={radius} disc={discRef} root={rootRef} />
     </MapContainer>

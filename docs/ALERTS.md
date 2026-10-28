@@ -127,3 +127,23 @@ the phase 3 screen exists). Independent of `LIVE_ENABLED`: alerts work in the of
 
 Code: `worker/providers/alerts/` (`tmlHub.ts`, `ttslRss.ts`, `provider.ts`), route in `worker/index.ts`, tests in
 `worker/alerts.test.ts` (on the saved samples) and `scripts/timetable/convert.test.ts` (line keys).
+
+## Phase 3 — on screen, 2026-10-28
+
+`ALERTS_ENABLED` is now `"true"`. The app reads `/api/alerts` every 60 s while visible (`src/lib/useAlerts.ts`);
+when the server answers `alerts_disabled` it shows nothing about alerts. Matching is in `src/offline/alerts.ts`
+(tested), the screens in `src/components/transit/AlertsPanel.tsx`.
+
+- **Top bar**: amber "⚠ N alerts" chip = alerts in force for the radar (lines/stops of the departures and vehicles
+  inside it, and operator-wide notices of the operators there). No chip when there are none; a grey "Alerts
+  unavailable" chip when they could not be loaded at all (offline). Tap → the alert list.
+- **Departure rows** (board and stop panel): "⚠ Line alert · operator" (a line alert for that line, at that stop
+  when the alert names stops) or "⚠ Stop alert · operator" (a stop alert for that stop, for that line or all lines).
+  Operator-wide notices are not put on rows (they would mark every row); they are in the list.
+- **Vehicle pins**: "⚠ Alert" badge when the vehicle's line has a line alert in force; the vehicle panel shows the
+  alert titles. Stop alerts do not mark vehicles.
+- **Alert list**: "In force" and "Announced"; per alert the title (Portuguese, as published), effect in English,
+  what it concerns (line numbers / stop names resolved by key; never ids), operator, validity ("until 3 Nov",
+  "published 24 Oct" for RSS notices), source and age; tap for the full text and the operator's link. A failed
+  source or a failed refresh is stated. The note says the times shown are still the timetable.
+- Legend and Help explain the badge. Colours: amber tokens (`--alert-*`) for both appearances; always icon + words.
