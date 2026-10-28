@@ -1,0 +1,3 @@
+route_id,service_id,trip_id,trip_headsign,direction_id,shape_id
+A,I2_21092026_A65_I2-tRB-SP_1,I2_21092026_A_A65_I2-tRB-SP_1_1.A31,Santa Apolónia,0,I2_21092026_shp_azul_rb-sp1
+A,I2_21092026_A65_I2-SP-tRB_2,I2_21092026_A_A65_I2-SP-tRB_2_1.A32,Reboleira,1,I2_21092026_shp_azul_sp-rb

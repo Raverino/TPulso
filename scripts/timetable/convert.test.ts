@@ -13,7 +13,8 @@ import {
   serviceDayStartMs,
 } from '../../shared/timetable.ts';
 import { convert, countTripsOn, cumulative, mergeNearDuplicates, sliceShape, stopDistances } from './convert.ts';
-import { folderSource } from './gtfs.ts';
+import { folderSource, type GtfsSource } from './gtfs.ts';
+import { replaceOperatorFeed } from './merge.ts';
 import { OPERATORS } from './operators.ts';
 
 const src = folderSource(path.resolve(import.meta.dirname, '../../fixtures/gtfs-tml-sample'));
@@ -215,5 +216,38 @@ describe('near-duplicate trips (Carris 734 in the evening: the same bus listed t
   it('does not merge when one stop is more than 2 minutes off', () => {
     const late = [[0, 0, 300, 300, 600, 600, 900, 900], [0, 0, 300, 300, 600, 600, 1030, 1030]];
     expect(mergeNearDuplicates([[73500, 0, WEEKDAYS], [73500, 1, WEEKDAYS]], late).merged).toBe(0);
+  });
+});
+
+describe('Metro from its own feed (replaceOperatorFeed)', () => {
+  // Real rows: the regional sample (2 Metro Az trips) and 2 Az trips from Metro's own feed (fixtures/gtfs-metro-sample).
+  const regional = folderSource(path.resolve(import.meta.dirname, '../../fixtures/gtfs-tml-sample'));
+  const metroOwn = folderSource(path.resolve(import.meta.dirname, '../../fixtures/gtfs-metro-sample'));
+  const rows = async (src: GtfsSource, file: string) => {
+    const out: Record<string, string>[] = [];
+    for await (const r of src(file)) out.push(r);
+    return out;
+  };
+  it('drops the regional Metro trips and adds the own feed, keeping the regional line key and prefixing the rest', async () => {
+    const merged = await replaceOperatorFeed(regional, { agencyId: 'IA2N9', prefix: 'metro:', source: metroOwn });
+    const routes = await rows(merged, 'routes.txt');
+    const az = routes.filter(r => r.agency_id === 'IA2N9');
+    expect(az).toHaveLength(1);
+    expect(az[0]!.route_id).toBe('[IA2N9]1_0'); // the regional key for line Az (used by the TML alerts)
+    expect(routes.filter(r => r.agency_id !== 'IA2N9')).toHaveLength(4); // the other operators untouched
+    const trips = await rows(merged, 'trips.txt');
+    expect(trips.filter(t => t.trip_id!.startsWith('[IA2N9]'))).toHaveLength(0);
+    const own = trips.filter(t => t.trip_id!.startsWith('metro:'));
+    expect(own).toHaveLength(2);
+    for (const t of own) expect(t.route_id).toBe('[IA2N9]1_0');
+    const st = await rows(merged, 'stop_times.txt');
+    expect(st.filter(r => r.trip_id!.startsWith('metro:')).every(r => r.stop_id!.startsWith('metro:'))).toBe(true);
+  });
+  it('converts: Metro trips come from its own feed, every other operator from the regional feed', async () => {
+    const merged = await replaceOperatorFeed(regional, { agencyId: 'IA2N9', prefix: 'metro:', source: metroOwn });
+    const res = await convert(merged, { today: TODAY, days: 14, operators: OPERATORS, version: 'test' });
+    const byId = Object.fromEntries(res.operators.map(o => [o.id, o]));
+    expect(byId.metro).toMatchObject({ tripsToday: 2, modes: ['tram'] });
+    expect(byId.cm).toMatchObject({ tripsToday: 2, modes: ['bus'] });
   });
 });

@@ -1,0 +1,2 @@
+agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_fare_url,cemv_support
+ML,"Metropolitano de Lisboa, E.P.E.",https://www.metrolisboa.pt,Europe/Lisbon,pt,https://www.metrolisboa.pt/comprar/,1

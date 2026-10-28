@@ -81,3 +81,17 @@ A live row replaces the matching Scheduled row by exact `trip_id`.
 4. Whether city Carris departures should be enabled now from the TML arrivals API. They are real data we already receive, but mostly scheduled only.
 
 Sources: MobilityDatabase entries [mdb-3412 (TML)](https://mobilitydatabase.org/feeds/gtfs/mdb-3412), [mdb-2929 (Carris)](https://mobilitydatabase.org/feeds/gtfs/mdb-2929), [tld-716 (Metro)](https://mobilitydatabase.org/feeds/gtfs/tld-716), [mdb-2057 (CP)](https://mobilitydatabase.org/feeds/gtfs/mdb-2057), [tld-715 (Fertagus)](https://mobilitydatabase.org/feeds/gtfs/tld-715), [mdb-2408 (MTS)](https://mobilitydatabase.org/feeds/gtfs/mdb-2408), [mdb-3186 (TCB)](https://mobilitydatabase.org/feeds/gtfs/mdb-3186), [mdb-1272 (MobiCascais)](https://mobilitydatabase.org/feeds/gtfs/mdb-1272); Carris real-time restriction: [Lisboa Para Pessoas](https://lisboaparapessoas.pt/en/?p=21696); Soflusa dataset on [dados.gov.pt](https://dados.gov.pt/en/datasets/informacao-sobre-transportes-publicos-da-cidade-de-lisboa-soflusa). All feed facts in the tables come from downloading and reading the files on 2026-10-25.
+
+## Metro de Lisboa: own feed is the source (2026-10-28)
+
+The regional feed lacks many rush-hour Metro trains. Marquês de Pombal on Tuesday 27 Oct 2026, 19:00–20:00:
+30 trains in the regional feed, 47 in Metro's own feed (11–14 per direction, matching the real 4–5 minute
+service). Since then the timetable build uses Metro's own feed for Metro (`useOwnFeed` in
+`scripts/timetable/operators.ts`, `scripts/timetable/merge.ts`):
+
+- The regional Metro routes and trips (agency `IA2N9`) are dropped and Metro's own routes, trips, stop times,
+  stops, calendar and shapes are added, with ids prefixed `metro:`.
+- Each Metro line keeps the regional `route_id` of the line with the same short name (e.g. `Az`), so the TML
+  alerts, which name Metro lines by their regional `route_id`, still link to the line. Metro stops now use the
+  own feed's stop ids, so a TML alert naming a Metro *stop* applies to its line only.
+- The Metro cross-check reports "own feed is the source" (nothing left to compare).

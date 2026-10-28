@@ -1,5 +1,6 @@
-// Operators in the TML regional GTFS feed (docs/OPERATORS.md). The regional feed is the single source;
-// each operator's own feed is used only to cross-check today's trip count.
+// Operators in the TML regional GTFS feed (docs/OPERATORS.md). The regional feed is the source, except for
+// operators marked useOwnFeed (their own feed replaces their part of it); other own feeds are only used to
+// cross-check today's trip count.
 
 export interface OperatorConfig {
   id: string;
@@ -8,13 +9,17 @@ export interface OperatorConfig {
   agencies: string[];
   /** Operator's own GTFS feed, for the cross-check (null = none exists). */
   ownFeed: string | null;
+  /** Use the operator's own feed instead of its part of the regional feed (it is the more reliable one). */
+  useOwnFeed?: boolean;
 }
 
 export const TML_FEED_URL = 'https://go.tmlmobilidade.pt/hub/api/v1/plans/gtfs';
 
 export const OPERATORS: OperatorConfig[] = [
   { id: 'cm', name: 'Carris Metropolitana', agencies: ['LA77N', 'BNA17', 'YA15B', 'A2L1N'], ownFeed: null }, // the TML feed is its own feed
-  { id: 'metro', name: 'Metro de Lisboa', agencies: ['IA2N9'], ownFeed: 'https://www.metrolisboa.pt/google_transit/googleTransit.zip' },
+  // Metro: its own feed has the full rush-hour service (Marqu?s de Pombal 19-20 h: 47 trains vs 30 in the
+  // regional feed, 27 Oct 2026), so it replaces the regional Metro trips.
+  { id: 'metro', name: 'Metro de Lisboa', agencies: ['IA2N9'], ownFeed: 'https://www.metrolisboa.pt/google_transit/googleTransit.zip', useOwnFeed: true },
   { id: 'cp', name: 'CP – Comboios de Portugal', agencies: ['N18KL'], ownFeed: 'https://publico.cp.pt/gtfs/gtfs.zip' },
   { id: 'fertagus', name: 'Fertagus', agencies: ['7NTB1'], ownFeed: 'https://www.fertagus.pt/GTFSTMLzip/Fertagus_GTFS.zip' },
   { id: 'ttsl', name: 'Transtejo / Soflusa', agencies: ['LTP61'], ownFeed: null },

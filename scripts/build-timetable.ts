@@ -8,7 +8,8 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { dateInZone, type Manifest, type OperatorInfo } from '../shared/timetable.ts';
 import { convert, countTripsOn } from './timetable/convert.ts';
-import { download, zipSource } from './timetable/gtfs.ts';
+import { download, zipSource, type GtfsSource } from './timetable/gtfs.ts';
+import { replaceOperatorFeed } from './timetable/merge.ts';
 import { CROSS_CHECK_TOLERANCE_PCT, OPERATORS, TML_FEED_URL } from './timetable/operators.ts';
 
 const args = process.argv.slice(2);
@@ -47,8 +48,20 @@ async function main() {
   let feedVersion = '';
   for await (const r of tml.source('feed_info.txt')) feedVersion = r.feed_version ?? '';
   const version = `${feedVersion.replace(/[^0-9A-Za-z-]/g, '')}_${today}`;
-  const res = await convert(tml.source, { today, days, operators: OPERATORS, version });
+  // Operators whose own feed replaces their part of the regional feed (operators.ts, useOwnFeed).
+  let source: GtfsSource = tml.source;
+  const ownZips: { close: () => void }[] = [];
+  for (const o of OPERATORS.filter(c => c.useOwnFeed && c.ownFeed)) {
+    const z = path.join(CACHE, `${o.id}.zip`);
+    const odl = await download(o.ownFeed!, z, maxAgeH);
+    const own = await zipSource(z);
+    ownZips.push(own);
+    for (const agencyId of o.agencies) source = await replaceOperatorFeed(source, { agencyId, prefix: `${o.id}:`, source: own.source });
+    log(`? ${o.name}: own feed ${mb(odl.bytes)} ${odl.reused ? '(cached copy)' : '(downloaded)'} replaces its part of the regional feed`);
+  }
+  const res = await convert(source, { today, days, operators: OPERATORS, version });
   tml.close();
+  for (const z of ownZips) z.close();
   log(`• Converted: ${res.stats.tripsInWindow} trips (${res.stats.duplicateTrips} exact and ${res.stats.nearDuplicateTrips} near duplicates merged${Object.keys(res.stats.nearDuplicatesByOp).length ? ` [near: ${Object.entries(res.stats.nearDuplicatesByOp).map(([o, n]) => `${o} ${n}`).join(", ")}]` : ""}), ${res.stats.stopTimes} stop times, ${res.stats.patterns} route patterns, ${res.stats.stops} stops; shape points ${res.stats.shapePointsRaw} → ${res.stats.shapePointsKept}`);
   const sd = Object.entries(res.stats.sameDayDuplicates);
   log(`• Same-day duplicate trips (listed twice for the same day): ${sd.length ? sd.map(([k, v]) => `${k} ${v}`).join(', ') : 'none'}; the rest were one trip listed under plans for different dates`);
@@ -58,7 +71,8 @@ async function main() {
   for (const o of res.operators) {
     const cfg = OPERATORS.find(c => c.id === o.id)!;
     let crossCheck: OperatorInfo['crossCheck'] = { ownTripsToday: null, diffPct: null, status: 'none', note: 'no separate feed' };
-    if (cfg.ownFeed && !flag('skip-cross-check')) {
+    if (cfg.useOwnFeed) crossCheck = { ownTripsToday: o.tripsToday, diffPct: 0, status: 'ok', note: 'own feed is the source' };
+    else if (cfg.ownFeed && !flag('skip-cross-check')) {
       try {
         const z = path.join(CACHE, `${o.id}.zip`);
         await download(cfg.ownFeed, z, maxAgeH);

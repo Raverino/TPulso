@@ -1,0 +1,3 @@
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+I2_21092026_A65_I2-tRB-SP_1,0,0,0,0,0,1,1,20260921,20261231
+I2_21092026_A65_I2-SP-tRB_2,0,0,0,0,0,1,1,20260921,20261231

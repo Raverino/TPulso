@@ -1,0 +1,23 @@
+stop_id,stop_name,stop_lat,stop_lon,zone_id,stop_url,location_type,parent_station
+AF,"Alfornelos",38.760616,-9.204708,1,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/alfornelos/,,
+AH,"Alto dos Moinhos",38.74958,-9.179946,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/alto-dos-moinhos/,,
+AS,"Amadora Este",38.758373,-9.219171,1,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/amadora-este/,,
+AV,"Avenida",38.720116,-9.145823,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/avenida/,,
+BC,"Baixa / Chiado",38.71067,-9.139091,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/baixa-chiado/,1,
+BC1,"Baixa / Chiado",38.71067,-9.139091,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/baixa-chiado/,0,BC
+BC2,"Baixa / Chiado",38.71067,-9.139091,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/baixa-chiado/,0,BC
+CA,"Carnide",38.759308,-9.192812,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/carnide/,,
+CM,"Colégio Militar/Luz",38.753323,-9.188663,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/colegio-militarluz/,,
+JZ,"Jardim Zoológico",38.742176,-9.168724,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/jardim-zoologico/,,
+LA,"Laranjeiras",38.748528,-9.172431,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/laranjeiras/,,
+MP,"Marquês de Pombal",38.72488,-9.150807,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/marques-de-pombal/,1,
+MP2,"Marquês de Pombal",38.72488,-9.150807,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/marques-de-pombal/,0,MP
+PA,"Parque",38.729725,-9.150276,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/parque/,,
+PO,"Pontinha",38.762398,-9.196931,C,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/pontinha/,,
+PE,"Praça de Espanha",38.73767,-9.158451,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/praca-de-espanha/,,
+RE,"Restauradores",38.715084,-9.141623,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/restauradores/,,
+SP,"Santa Apolónia",38.713783,-9.122563,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/santa-apolonia/,,
+SS,"São Sebastião",38.73484,-9.154225,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/sao-sebastiao/,1,
+SS2,"São Sebastião",38.73484,-9.154225,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/sao-sebastiao/,0,SS
+TP,"Terreiro do Paço",38.707207,-9.133351,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/terreiro-do-paco/,,
+RB,"Reboleira",38.75221,-9.22414,L,https://www.metrolisboa.pt/informacao/planear-a-viagem/diagrama-e-mapa-de-rede/reboleira/,,
