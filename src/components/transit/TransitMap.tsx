@@ -33,6 +33,8 @@ const MODE_GLYPH: Record<Vehicle["mode"], string> = {
 
 const esc = (s: string) => s.replace(/[<>&"']/g, "");
 const HEX = /^#[0-9a-f]{6}$/i;
+/** TPulso: station rings are drawn at 90 % of their departures-based size (vehicle pins: CSS zoom 0.9). */
+const MARKER_SCALE = 0.9;
 const MODE_VAR: Record<TransportMode, string> = { bus: "var(--bus)", tram: "var(--tram)", train: "var(--train)", ferry: "var(--ferry)" };
 
 /** TPulso: a stop marker on the map: a bus/tram platform (one direction) or a metro/train/ferry station
@@ -92,7 +94,9 @@ function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel
   const ring = s.modes.length > 1
     ? `conic-gradient(${s.modes.map((m, i) => `${MODE_VAR[m]} ${(i * 100) / n}% ${((i + 1) * 100) / n}%`).join(", ")})`
     : MODE_VAR[s.modes[0] ?? "bus"];
-  const box = Math.max(28, s.size + 4);
+  // Drawn at 90 % of the departures-based size (owner request: lighter markers); the tap box stays ≥ 28 px.
+  const size = Math.round(s.size * MARKER_SCALE);
+  const box = Math.max(28, size + 4);
   const dir = heading !== null ? `<span class="station-dir" style="--heading:${heading}deg" aria-hidden="true">${DIR_CHIP}</span>` : "";
   const tag =
     (badge ? `<span class="station-letter">${esc(badge)}</span>` : "") +
@@ -101,7 +105,7 @@ function stationIcon(s: MapStation, selected: boolean, badge?: string, withLabel
     className: "",
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
-    html: `<div class="station${selected ? " is-selected" : ""}${s.idle ? " is-idle" : ""}" style="--size:${s.size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${dir}${tag}</div>`,
+    html: `<div class="station${selected ? " is-selected" : ""}${s.idle ? " is-idle" : ""}" style="--size:${size}px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span>${dir}${tag}</div>`,
   });
   stationIconCache.set(key, icon);
   return icon;
@@ -167,10 +171,11 @@ function vehicleIcon(v: Vehicle, alert = false) {
   const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
+  // The pin is drawn 34 px and scaled to 90 % with CSS zoom (.vehicle-marker .vehicle-pin): 31 px box.
   const icon = L.divIcon({
     className: "vehicle-marker",
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
+    iconSize: [31, 31],
+    iconAnchor: [15.5, 15.5],
     // TPulso offline: every vehicle is an Expected position from the timetable (dashed outline + badge).
     // TPulso: the pin colour comes only from the mode (src/config.ts MODE_COLORS).
     html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
@@ -216,9 +221,9 @@ function areaIcon(modes: TransportMode[], count: number) {
     : MODE_VAR[modes[0] ?? "bus"];
   const icon = L.divIcon({
     className: "",
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    html: `<div class="station area-point" style="--size:32px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span><span class="area-count">${count}</span></div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    html: `<div class="station area-point" style="--size:29px;--ring:${ring}"><span class="station-ring"></span><span class="station-core"></span><span class="area-count">${count}</span></div>`,
   });
   areaIconCache.set(key, icon);
   return icon;
@@ -711,11 +716,11 @@ function MapController({
 
   const fitAt = useCallback(
     (c: LatLng, glide: boolean) => {
-      // The zoom at which the circle (radius in metres) fits the shorter side with 38 px to spare (room for the
+      // The zoom at which the circle (radius in metres) fits the shorter side with 30 px to spare (room for the
       // compass letters on the bezel). Computed from metres per pixel rather than with fitBounds, which would fit
       // the *rotated* square when the map is turned.
       const size = map.getSize();
-      const rPx = Math.max(40, Math.min(size.x, size.y) / 2 - 38);
+      const rPx = Math.max(40, Math.min(size.x, size.y) / 2 - 30);
       const z = Math.log2((156_543.034 * Math.cos((c.lat * Math.PI) / 180) * rPx) / latest.current.radius);
       if (glide) map.flyTo([c.lat, c.lng], z, { duration: RECENTER_ANIM_S });
       else map.setView([c.lat, c.lng], z, { animate: true });
@@ -1230,6 +1235,7 @@ function Compass({ map, root }: { map: L.Map | null; root: RefObject<HTMLDivElem
       {(["N", "E", "S", "W"] as const).map((l, i) =>
         l === "N" ? (
           <button key={l} type="button" className="compass-letter is-north" style={{ "--a": "0deg" } as React.CSSProperties} onClick={() => api.current?.toNorth()} aria-label="Turn the map to north up" title="North up">
+            <span className="north-ripple" aria-hidden />
             N
           </button>
         ) : (

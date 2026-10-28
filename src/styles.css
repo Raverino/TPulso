@@ -879,18 +879,18 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   position: absolute;
   left: var(--x);
   top: var(--y);
-  width: 24px;
-  height: 24px;
-  margin: -12px 0 0 -12px;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
   display: grid;
   place-items: center;
   border-radius: 9999px;
   background: oklch(0.12 0.015 258);
   color: var(--foreground);
   box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--radar) 55%, transparent);
-  font: 800 13px/1 var(--font-display), sans-serif;
+  font: 800 12px/1 var(--font-display), sans-serif;
   pointer-events: none;
-  transform: rotate(calc(var(--bearing, 0deg) + var(--a))) translateY(calc(-1 * (var(--r) + 11px)))
+  transform: rotate(calc(var(--bearing, 0deg) + var(--a))) translateY(calc(-1 * (var(--r) + 9px)))
     rotate(calc(-1 * (var(--bearing, 0deg) + var(--a))));
 }
 .compass-letter.is-north {
@@ -909,35 +909,61 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 .compass-letter.is-north.is-pressed {
   opacity: 0.7;
 }
-/* Map turned away from north: N pulses (scale + halo) to show it can be tapped. */
-.compass.is-turned .compass-letter.is-north {
-  animation: north-pulse 1.6s ease-in-out infinite;
+/* Map turned away from north: a thin circle grows out of N and fades (N itself stays still), a hint that it
+   can be tapped. The ripple is its own child element (::before/::after are taken by the tile and touch area). */
+.north-ripple {
+  display: none;
 }
-@keyframes north-pulse {
-  0%,
-  100% {
+.compass.is-turned .north-ripple {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid var(--ripple, var(--radar));
+  pointer-events: none;
+  animation: north-ripple 1.8s ease-out infinite;
+}
+@keyframes north-ripple {
+  from {
     scale: 1;
-    filter: drop-shadow(0 0 0 transparent);
+    opacity: 0.9;
   }
-  50% {
-    scale: 1.22;
-    filter: drop-shadow(0 0 5px var(--radar));
+  to {
+    scale: 2.3;
+    opacity: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .compass.is-turned .compass-letter.is-north {
+  .compass.is-turned .north-ripple {
     animation: none;
-    outline: 2px solid var(--radar);
-    outline-offset: 2px;
+    scale: 1.45;
+    opacity: 0.8;
   }
 }
 
-/* Phones: the map grows/shrinks as the departures panel is raised or lowered; the grab bar on the panel. */
-.map-slot {
-  transition: height 220ms ease-out;
+/* Phones, vehicle panel: raised over the lower part of the map (it slides; the map is never resized). While it
+   is up, the compass and bezel fade out, so the visible part of the map stays clean. */
+.sheet-raise {
+  transition: margin-top 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.map-slot .compass,
+.map-slot .sonar-bezel,
+.map-slot .sonar-ticks {
+  transition: opacity 260ms ease-out;
+}
+.map-slot.is-covered .compass,
+.map-slot.is-covered .sonar-bezel,
+.map-slot.is-covered .sonar-ticks {
+  opacity: 0;
+}
+.map-slot.is-covered .compass-letter {
+  pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .map-slot {
+  .sheet-raise,
+  .map-slot .compass,
+  .map-slot .sonar-bezel,
+  .map-slot .sonar-ticks {
     transition: none;
   }
 }
@@ -1215,12 +1241,12 @@ button.is-pressed:not(:disabled):not(.compass-letter),
       color-mix(in oklch, var(--radar) 85%, transparent) var(--r),
       color-mix(in oklch, var(--radar) 85%, transparent) calc(var(--r) + 2px),
       var(--cobalt) calc(var(--r) + 2px),
-      var(--cobalt) calc(var(--r) + 4px),
-      #fff calc(var(--r) + 4px),
-      #fff calc(var(--r) + 23px),
-      var(--cobalt) calc(var(--r) + 23px),
-      var(--cobalt) calc(var(--r) + 26px),
-      transparent calc(var(--r) + 26px)
+      var(--cobalt) calc(var(--r) + 3.5px),
+      #fff calc(var(--r) + 3.5px),
+      #fff calc(var(--r) + 17px),
+      var(--cobalt) calc(var(--r) + 17px),
+      var(--cobalt) calc(var(--r) + 19px),
+      transparent calc(var(--r) + 19px)
     ),
     var(--azulejo-tile) 0 0 / 40px 40px;
   -webkit-mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
@@ -1236,8 +1262,8 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   color: var(--cobalt);
   box-shadow: inset 0 0 0 2px var(--cobalt);
 }
-[data-appearance="azulejo"] .compass.is-turned .compass-letter.is-north {
-  --radar: var(--cobalt);
+[data-appearance="azulejo"] .north-ripple {
+  --ripple: var(--cobalt);
 }
 [data-appearance="azulejo"] .compass-letter.is-north {
   background: transparent;
@@ -1509,7 +1535,12 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   border-left: 2px solid var(--alert-line);
 }
 /* On a vehicle pin: top right, like the original's "?" badge corner. */
-.vehicle-pin .pin-alert {
+/* Map markers at 90 % (owner request); the pin keeps its 34 px design, the marker box is 31 px. */
+.vehicle-marker .vehicle-pin {
+  zoom: 0.9;
+}
+.vehicle-pin .pin-alert,
+.legend-alert {
   position: absolute;
   top: -9px;
   right: -13px;
@@ -1524,4 +1555,32 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   font: 800 8px/12px var(--font-sans), sans-serif;
   box-shadow: 0 0 0 1.5px var(--background);
   pointer-events: none;
+}
+
+/* --- TPulso: legend symbols are small copies of the real map markers (same classes, both appearances) --- */
+.legend-alert {
+  position: static;
+  display: inline-flex;
+}
+.legend-pin,
+.legend-stop {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  pointer-events: none;
+}
+.legend-pin .vehicle-pin {
+  zoom: 0.48;
+  animation: none;
+}
+.legend-stop .station {
+  width: 18px;
+  height: 18px;
+}
+.legend-stop .station::before,
+.legend-pin .vehicle-pin::after,
+.legend-stop .station::after {
+  display: none;
 }

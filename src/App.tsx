@@ -456,6 +456,8 @@ export default function App() {
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   // Phones: the departures panel raised over part of the radar (scroll its list, or tap its grab bar).
   const [sheetUp, setSheetUp] = useState(false);
+  // Each vehicle opens with the panel down.
+  useEffect(() => setSheetUp(false), [selectedId]);
   const exitRide = useCallback(() => {
     setRide(null);
     setRecenterRequest((n) => n + 1); // back to the TEST point
@@ -479,8 +481,6 @@ export default function App() {
     setOpenId(null);
     setAreaCloseRequest((n) => n + 1);
     setPanelView(view);
-    // A list to read: give it the room on phones.
-    setSheetUp(true);
   }, []);
 
   // TPulso: an expanded area point lists its stations in the side panel (letter, full name, direction,
@@ -880,16 +880,33 @@ export default function App() {
 
   const showOverlay = gps === "pending" || (gps === "denied" && !testAccepted);
 
-  // Where the radar is and which timetable is used: under the title on wide screens, its own row on phones.
+  // Phones: only the vehicle panel (its list of stops further along the line) can be raised over the map.
+  const vehicleView = !!selected && panelView === "results";
+  const vehiclePanelUp = sheetUp && vehicleView;
+
+  // Where the radar is. Phones show only this (plus a timetable problem, if any); wide screens add the timetable
+  // window and the vehicle count.
+  const place =
+    gps === "pending" ? (
+      "Locating you…"
+    ) : exploring ? (
+      <span className="font-bold text-primary">{`Exploring here · ${exploringM >= 1000 ? `${(exploringM / 1000).toFixed(1)} km` : `${exploringM} m`} from ${gps === "granted" ? "my location" : "the TEST location"}`}</span>
+    ) : gps === "granted" ? (
+      "My location"
+    ) : (
+      `TEST location: ${region.testLocation.label}`
+    );
+  const timetableProblem = manifest ? (
+    expired ? (
+      <span className="font-bold text-destructive"> · timetable expired — connect to update</span>
+    ) : null
+  ) : tt.error ? (
+    <span className="font-bold text-destructive"> · timetable unavailable</span>
+  ) : null;
   const statusLine = (
     <>
-      {gps === "pending"
-        ? "Locating you… · "
-        : exploring
-          ? <span className="font-bold text-primary">{`Exploring here · ${exploringM >= 1000 ? `${(exploringM / 1000).toFixed(1)} km` : `${exploringM} m`} from ${gps === "granted" ? "my location" : "the TEST location"} · `}</span>
-          : gps === "granted"
-            ? "My location · "
-            : `TEST location: ${region.testLocation.label} · `}
+      {place}
+      {" · "}
       {manifest ? (
         expired ? (
           <span className="font-bold text-destructive">timetable expired — connect to update</span>
@@ -969,7 +986,8 @@ export default function App() {
         </div>
         <p className="w-full truncate text-[10px] leading-tight text-muted-foreground md:hidden">
           <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">Timetable data, not live</span>
-          {statusLine}
+          {place}
+          {timetableProblem}
         </p>
         <div className="flex w-full items-center justify-between gap-1 md:contents">
         <div className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
@@ -1036,7 +1054,7 @@ export default function App() {
 
       {/* Radar left, departures right (stacked on narrow phones) */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <div className={`map-slot relative shrink-0 overflow-hidden md:h-auto md:flex-1 ${sheetUp ? "h-[28%]" : "h-[50%]"}`}>
+        <div className={`map-slot relative isolate h-[56%] shrink-0 overflow-hidden md:h-auto md:flex-1 ${vehiclePanelUp ? "is-covered" : ""}`}>
           <Suspense
             fallback={
               <div className="grid h-full place-items-center text-muted-foreground">
@@ -1144,8 +1162,8 @@ export default function App() {
           <Legend variant="strip" alerts={!!alertsView?.current.length} />
         </div>
         <ArrivalsDrawer
-          sheetUp={sheetUp}
-          onSheet={setSheetUp}
+          sheetUp={vehiclePanelUp}
+          onSheet={vehicleView ? setSheetUp : undefined}
           arrivals={arrivals}
           radius={radius}
           vehicle={selected}

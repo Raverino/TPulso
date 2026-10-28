@@ -5,7 +5,8 @@
 // - /data/<version>/...: cache first; these files never change, a new timetable gets a new version folder
 // - app files (/assets, fonts, icons): cache first
 // Map tiles are not cached here.
-const SHELL = 'tpulso-shell-v2';
+// Bump when cache-first app files keep their names but change (v3: new TPulso icons and manifest).
+const SHELL = 'tpulso-shell-v3';
 const DATA_PREFIX = 'tpulso-data-';
 
 self.addEventListener('install', (e) => {

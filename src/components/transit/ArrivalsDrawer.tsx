@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type UIEvent } from "react";
+import { memo, useEffect, useRef, useState, type TouchEvent, type WheelEvent } from "react";
 import { useClock } from "@/lib/clock";
 import { MODE_COLORS } from "@/config";
 import {
@@ -242,25 +242,43 @@ export default function ArrivalsDrawer({
   const flipped = !!vehicle || panelView !== "results";
   const back = last.current;
 
-  // TPulso, phones: scrolling a list down raises the panel; scrolling back to its top lowers it. Only the panel's
-  // own lists count (not small nested ones), and a short pause after each change stops the resize from bouncing.
+  // TPulso, phones, vehicle panel only (onSheet is set by App): a swipe up (or wheel down) on the panel slides it
+  // up over the map; a swipe down (wheel up) while its list is at the top lowers it again. A short pause after
+  // each change keeps it from bouncing.
   const sheetLock = useRef(0);
-  const onScrollCapture = (e: UIEvent) => {
-    const el = e.target;
-    if (!onSheet || !(el instanceof HTMLElement) || el.clientHeight < 120 || Date.now() < sheetLock.current) return;
-    if (!sheetUp && el.scrollTop > 24 && el.scrollHeight - el.clientHeight > 120) {
+  const touchY = useRef<number | null>(null);
+  const scrolledInside = (t: EventTarget | null, stop: HTMLElement) => {
+    for (let el = t instanceof HTMLElement ? t : null; el && el !== stop; el = el.parentElement) if (el.scrollTop > 0) return true;
+    return false;
+  };
+  const sheetGesture = (dy: number, target: EventTarget | null, root: HTMLElement) => {
+    if (!onSheet || Date.now() < sheetLock.current) return;
+    if (!sheetUp && dy < -20) {
       sheetLock.current = Date.now() + 450;
       onSheet(true);
-    } else if (sheetUp && el.scrollTop <= 0) {
+    } else if (sheetUp && dy > 20 && !scrolledInside(target, root)) {
       sheetLock.current = Date.now() + 450;
       onSheet(false);
     }
   };
+  const onTouchStart = (e: TouchEvent) => {
+    touchY.current = e.touches[0]?.clientY ?? null;
+  };
+  const onTouchMove = (e: TouchEvent<HTMLElement>) => {
+    const y = e.touches[0]?.clientY;
+    if (touchY.current === null || y === undefined) return;
+    sheetGesture(y - touchY.current, e.target, e.currentTarget);
+  };
+  const onWheel = (e: WheelEvent<HTMLElement>) => sheetGesture(-e.deltaY, e.target, e.currentTarget);
 
   return (
     <aside
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l"
-      onScrollCapture={onScrollCapture}
+      className={`sheet-raise relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l ${
+        sheetUp ? "rounded-t-2xl shadow-float max-md:-mt-[30dvh]" : ""
+      }`}
+      onTouchStart={onSheet ? onTouchStart : undefined}
+      onTouchMove={onSheet ? onTouchMove : undefined}
+      onWheel={onSheet ? onWheel : undefined}
     >
       {onSheet && (
         <button
