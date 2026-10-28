@@ -711,10 +711,11 @@ function MapController({
 
   const fitAt = useCallback(
     (c: LatLng, glide: boolean) => {
-      // The zoom at which the circle (radius in metres) fits the shorter side with 28 px to spare. Computed from
-      // metres per pixel rather than with fitBounds, which would fit the *rotated* square when the map is turned.
+      // The zoom at which the circle (radius in metres) fits the shorter side with 38 px to spare (room for the
+      // compass letters on the bezel). Computed from metres per pixel rather than with fitBounds, which would fit
+      // the *rotated* square when the map is turned.
       const size = map.getSize();
-      const rPx = Math.max(40, Math.min(size.x, size.y) / 2 - 28);
+      const rPx = Math.max(40, Math.min(size.x, size.y) / 2 - 38);
       const z = Math.log2((156_543.034 * Math.cos((c.lat * Math.PI) / 180) * rPx) / latest.current.radius);
       if (glide) map.flyTo([c.lat, c.lng], z, { duration: RECENTER_ANIM_S });
       else map.setView([c.lat, c.lng], z, { animate: true });
@@ -743,6 +744,19 @@ function MapController({
   useEffect(() => {
     fitAt(exploring.current ? map.getCenter() : latest.current.userPos, false);
   }, [radius, fitAt, map]);
+  // The map's box changed (phone panel raised/lowered, screen turned): fit the circle again once it has settled.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onResize = () => {
+      clearTimeout(t);
+      t = setTimeout(() => fitAt(map.getCenter(), false), 260);
+    };
+    map.on("resize", onResize);
+    return () => {
+      clearTimeout(t);
+      map.off("resize", onResize);
+    };
+  }, [fitAt, map]);
   // New position: follow it only while not exploring. During a test ride the animation loop sets the camera
   // every frame from the vehicle's computed position, so nothing is animated here (no fighting the markers).
   useEffect(() => {
@@ -975,8 +989,12 @@ function Compass({ map, root }: { map: L.Map | null; root: RefObject<HTMLDivElem
     if (!map) return;
     const targets = [map.getPane("markerPane"), compassRef.current, root.current?.querySelector<HTMLElement>(".sonar-ticks")];
     const set = () => {
-      const v = `${map.getBearing()}deg`;
+      const b = map.getBearing();
+      const v = `${b}deg`;
       for (const el of targets) el?.style.setProperty("--bearing", v);
+      // N pulses while the map is turned: a hint that tapping it turns north back up.
+      const off = Math.abs(normDeg(b)) > 1.5;
+      compassRef.current?.classList.toggle("is-turned", off);
     };
     set();
     map.on("rotate", set);

@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type UIEvent } from "react";
 import { useClock } from "@/lib/clock";
 import { MODE_COLORS } from "@/config";
 import {
@@ -143,6 +143,9 @@ interface Props {
   /** Alerts on the selected vehicle's line. */
   vehicleAlerts?: ServiceAlert[];
   onShowAlerts?: (() => void) | undefined;
+  /** TPulso, phones: the panel is raised over part of the map (more room for the list). */
+  sheetUp?: boolean;
+  onSheet?: ((up: boolean) => void) | undefined;
 }
 
 /** TPulso: a departure row's trip, expanded: its upcoming stops (same data as the vehicle panel). */
@@ -219,6 +222,8 @@ export default function ArrivalsDrawer({
   alerts = null,
   vehicleAlerts = [],
   onShowAlerts,
+  sheetUp = false,
+  onSheet,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
   const [showVeh, setShowVeh] = useState(true);
@@ -237,11 +242,40 @@ export default function ArrivalsDrawer({
   const flipped = !!vehicle || panelView !== "results";
   const back = last.current;
 
+  // TPulso, phones: scrolling a list down raises the panel; scrolling back to its top lowers it. Only the panel's
+  // own lists count (not small nested ones), and a short pause after each change stops the resize from bouncing.
+  const sheetLock = useRef(0);
+  const onScrollCapture = (e: UIEvent) => {
+    const el = e.target;
+    if (!onSheet || !(el instanceof HTMLElement) || el.clientHeight < 120 || Date.now() < sheetLock.current) return;
+    if (!sheetUp && el.scrollTop > 24 && el.scrollHeight - el.clientHeight > 120) {
+      sheetLock.current = Date.now() + 450;
+      onSheet(true);
+    } else if (sheetUp && el.scrollTop <= 0) {
+      sheetLock.current = Date.now() + 450;
+      onSheet(false);
+    }
+  };
+
   return (
-    <aside className="relative min-h-0 flex-1 overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l">
+    <aside
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:w-[360px] md:flex-none md:border-l"
+      onScrollCapture={onScrollCapture}
+    >
+      {onSheet && (
+        <button
+          type="button"
+          onClick={() => onSheet(!sheetUp)}
+          aria-label={sheetUp ? "Show more of the map" : "Show more of the list"}
+          aria-expanded={sheetUp}
+          className="sheet-handle grid h-4 w-full shrink-0 place-items-center bg-surface md:hidden"
+        >
+          <span aria-hidden />
+        </button>
+      )}
       {/* TPulso: the detail panel slides and fades over the list (transform + opacity only, 220 ms; instant with
           reduced motion). Both layers fill the same reserved space, so the map never resizes. */}
-      <div className="relative h-full w-full">
+      <div className="relative min-h-0 w-full flex-1">
         <div
           className={`panel-layer absolute inset-0 flex flex-col bg-surface ${flipped ? "is-behind pointer-events-none" : ""}`}
           aria-hidden={flipped}

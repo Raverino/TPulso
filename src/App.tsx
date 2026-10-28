@@ -454,6 +454,8 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [panelView, setPanelView] = useState<"results" | "help" | "stop" | "area" | "alerts">("results");
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  // Phones: the departures panel raised over part of the radar (scroll its list, or tap its grab bar).
+  const [sheetUp, setSheetUp] = useState(false);
   const exitRide = useCallback(() => {
     setRide(null);
     setRecenterRequest((n) => n + 1); // back to the TEST point
@@ -477,6 +479,8 @@ export default function App() {
     setOpenId(null);
     setAreaCloseRequest((n) => n + 1);
     setPanelView(view);
+    // A list to read: give it the room on phones.
+    setSheetUp(true);
   }, []);
 
   // TPulso: an expanded area point lists its stations in the side panel (letter, full name, direction,
@@ -876,11 +880,39 @@ export default function App() {
 
   const showOverlay = gps === "pending" || (gps === "denied" && !testAccepted);
 
+  // Where the radar is and which timetable is used: under the title on wide screens, its own row on phones.
+  const statusLine = (
+    <>
+      {gps === "pending"
+        ? "Locating you… · "
+        : exploring
+          ? <span className="font-bold text-primary">{`Exploring here · ${exploringM >= 1000 ? `${(exploringM / 1000).toFixed(1)} km` : `${exploringM} m`} from ${gps === "granted" ? "my location" : "the TEST location"} · `}</span>
+          : gps === "granted"
+            ? "My location · "
+            : `TEST location: ${region.testLocation.label} · `}
+      {manifest ? (
+        expired ? (
+          <span className="font-bold text-destructive">timetable expired — connect to update</span>
+        ) : (
+          <span className="font-bold text-foreground/80">Timetable · valid {help.window}</span>
+        )
+      ) : tt.error ? (
+        <span className="font-bold text-destructive">timetable unavailable</span>
+      ) : (
+        "loading timetable…"
+      )}
+      {` · ${inRange} expected vehicles in the area`}
+      {tt.loading && manifest ? " · loading map areas…" : ""}
+    </>
+  );
+
   return (
     <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-background">
       {/* Compact top bar */}
-      <header className="app-header flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2">
-        <span className="grid size-7 place-items-center rounded-xl bg-primary text-primary-foreground">
+      {/* Phones: row 1 title, clock, appearance, alerts, help; row 2 status; row 3 radius, filters, recentre.
+          Wide screens: one wrapping row, as in the original. */}
+      <header className="app-header flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-surface px-3 py-2">
+        <span className="grid size-7 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
           <Radar className="size-3.5" />
         </span>
         <div className="min-w-0 flex-1">
@@ -897,33 +929,12 @@ export default function App() {
                 Test ride{ride.speed > 1 ? ` · ${ride.speed}× clock` : ""}
               </span>
             )}
-            {/* TPulso offline: always say this is not live */}
-            <span className="rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+            {/* TPulso offline: always say this is not live (on phones: at the start of the status row) */}
+            <span className="hidden rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground md:inline">
               Timetable data, not live
             </span>
           </h1>
-          <p className="truncate text-[10px] text-muted-foreground">
-            {gps === "pending"
-              ? "Locating you… · "
-              : exploring
-                ? <span className="font-bold text-primary">{`Exploring here · ${exploringM >= 1000 ? `${(exploringM / 1000).toFixed(1)} km` : `${exploringM} m`} from ${gps === "granted" ? "my location" : "the TEST location"} · `}</span>
-                : gps === "granted"
-                  ? "My location · "
-                  : `TEST location: ${region.testLocation.label} · `}
-            {manifest ? (
-              expired ? (
-                <span className="font-bold text-destructive">timetable expired — connect to update</span>
-              ) : (
-                <span className="font-bold text-foreground/80">Timetable · valid {help.window}</span>
-              )
-            ) : tt.error ? (
-              <span className="font-bold text-destructive">timetable unavailable</span>
-            ) : (
-              "loading timetable…"
-            )}
-            {` · ${inRange} expected vehicles in the area`}
-            {tt.loading && manifest ? " · loading map areas…" : ""}
-          </p>
+          <p className="hidden truncate text-[10px] text-muted-foreground md:block">{statusLine}</p>
         </div>
 
         <Clock />
@@ -936,7 +947,14 @@ export default function App() {
             className={`flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold ${alertsView.current.length ? "alert-chip" : "border border-border bg-surface-2 text-muted-foreground"}`}
           >
             <TriangleAlert className="size-3" aria-hidden />
-            {alertsView.current.length ? `${alertsView.current.length} alert${alertsView.current.length === 1 ? "" : "s"}` : "Alerts unavailable"}
+            {alertsView.current.length ? (
+              <>
+                {alertsView.current.length}
+                <span className="hidden sm:inline">{` alert${alertsView.current.length === 1 ? "" : "s"}`}</span>
+              </>
+            ) : (
+              "Alerts unavailable"
+            )}
           </button>
         )}
         <div className="flex gap-0.5">
@@ -949,12 +967,17 @@ export default function App() {
             <CircleHelp className="size-3.5" />
           </button>
         </div>
+        <p className="w-full truncate text-[10px] leading-tight text-muted-foreground md:hidden">
+          <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">Timetable data, not live</span>
+          {statusLine}
+        </p>
+        <div className="flex w-full items-center justify-between gap-1 md:contents">
         <div className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
           {RADII.map((r) => (
             <button
               key={r}
               onClick={() => setRadius(r)}
-              className={`rounded-lg px-2 py-1 font-display text-[11px] font-bold transition-colors ${
+              className={`rounded-lg px-1.5 py-1 font-display text-[11px] font-bold transition-colors sm:px-2 ${
                 radius === r ? "bg-primary text-primary-foreground" : "text-muted-foreground"
               }`}
             >
@@ -973,7 +996,7 @@ export default function App() {
                 disabled={!enabled}
                 title={enabled ? label : `${label} · no data yet`}
                 aria-label={enabled ? label : `${label}, no data yet`}
-                className={`flex min-w-11 items-center justify-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors ${
+                className={`flex min-w-8 items-center justify-center gap-1 rounded-lg px-1 py-1.5 text-[11px] font-semibold transition-colors sm:min-w-11 sm:px-2 sm:py-1 ${
                   filter === key ? (key === "all" ? "bg-foreground text-background" : "") : enabled ? "text-foreground/70" : "cursor-not-allowed text-foreground/35"
                 }`}
                 // TPulso: chips use the mode colours (src/config.ts); the active chip is filled with its colour.
@@ -1008,11 +1031,12 @@ export default function App() {
         >
           <Crosshair className="size-3.5" />
         </button>
+        </div>
       </header>
 
       {/* Radar left, departures right (stacked on narrow phones) */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <div className="relative h-[55%] shrink-0 md:h-auto md:flex-1">
+        <div className={`map-slot relative shrink-0 overflow-hidden md:h-auto md:flex-1 ${sheetUp ? "h-[28%]" : "h-[50%]"}`}>
           <Suspense
             fallback={
               <div className="grid h-full place-items-center text-muted-foreground">
@@ -1060,7 +1084,7 @@ export default function App() {
             )}
           </Suspense>
           {/* TPulso: legend of the timetable states + "Timetable data, not live" */}
-          <div className="pointer-events-none absolute bottom-6 left-2 z-[470]">
+          <div className="pointer-events-none absolute bottom-6 left-2 z-[470] hidden md:block">
             <Legend alerts={!!alertsView?.current.length} />
           </div>
           {expired && !showOverlay && (
@@ -1115,7 +1139,13 @@ export default function App() {
             </div>
           )}
         </div>
+        {/* Phones: the legend sits under the radar, never over it. */}
+        <div className="shrink-0 md:hidden">
+          <Legend variant="strip" alerts={!!alertsView?.current.length} />
+        </div>
         <ArrivalsDrawer
+          sheetUp={sheetUp}
+          onSheet={setSheetUp}
           arrivals={arrivals}
           radius={radius}
           vehicle={selected}
@@ -1208,7 +1238,7 @@ const AppearanceSwitch = memo(function AppearanceSwitch() {
       onClick={() => setAppearance(on ? "standard" : "azulejo")}
       className="appearance-switch flex items-center gap-1.5 rounded-lg px-1 py-1 text-[11px] font-semibold"
     >
-      <span className={on ? "text-muted-foreground" : "text-foreground"}>Standard</span>
+      <span className={`hidden sm:inline ${on ? "text-muted-foreground" : "text-foreground"}`}>Standard</span>
       <span className={`appearance-track${on ? " is-on" : ""}`} aria-hidden="true">
         <span className="appearance-knob" />
       </span>

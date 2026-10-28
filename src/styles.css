@@ -879,17 +879,18 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   position: absolute;
   left: var(--x);
   top: var(--y);
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
   display: grid;
   place-items: center;
   border-radius: 9999px;
   background: oklch(0.12 0.015 258);
-  color: var(--muted-foreground);
-  font: 700 10px/1 var(--font-display), sans-serif;
+  color: var(--foreground);
+  box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--radar) 55%, transparent);
+  font: 800 13px/1 var(--font-display), sans-serif;
   pointer-events: none;
-  transform: rotate(calc(var(--bearing, 0deg) + var(--a))) translateY(calc(-1 * (var(--r) + 10px)))
+  transform: rotate(calc(var(--bearing, 0deg) + var(--a))) translateY(calc(-1 * (var(--r) + 11px)))
     rotate(calc(-1 * (var(--bearing, 0deg) + var(--a))));
 }
 .compass-letter.is-north {
@@ -899,8 +900,53 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   pointer-events: auto;
   cursor: pointer;
 }
+/* A bigger touch target than the drawn letter */
+.compass-letter.is-north::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+}
 .compass-letter.is-north.is-pressed {
   opacity: 0.7;
+}
+/* Map turned away from north: N pulses (scale + halo) to show it can be tapped. */
+.compass.is-turned .compass-letter.is-north {
+  animation: north-pulse 1.6s ease-in-out infinite;
+}
+@keyframes north-pulse {
+  0%,
+  100% {
+    scale: 1;
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  50% {
+    scale: 1.22;
+    filter: drop-shadow(0 0 5px var(--radar));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .compass.is-turned .compass-letter.is-north {
+    animation: none;
+    outline: 2px solid var(--radar);
+    outline-offset: 2px;
+  }
+}
+
+/* Phones: the map grows/shrinks as the departures panel is raised or lowered; the grab bar on the panel. */
+.map-slot {
+  transition: height 220ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-slot {
+    transition: none;
+  }
+}
+.sheet-handle > span {
+  display: block;
+  width: 40px;
+  height: 4px;
+  border-radius: 9999px;
+  background: color-mix(in oklch, var(--foreground) 30%, transparent);
 }
 
 .station.is-selected .station-label {
@@ -1171,10 +1217,10 @@ button.is-pressed:not(:disabled):not(.compass-letter),
       var(--cobalt) calc(var(--r) + 2px),
       var(--cobalt) calc(var(--r) + 4px),
       #fff calc(var(--r) + 4px),
-      #fff calc(var(--r) + 19px),
-      var(--cobalt) calc(var(--r) + 19px),
-      var(--cobalt) calc(var(--r) + 22px),
-      transparent calc(var(--r) + 22px)
+      #fff calc(var(--r) + 23px),
+      var(--cobalt) calc(var(--r) + 23px),
+      var(--cobalt) calc(var(--r) + 26px),
+      transparent calc(var(--r) + 26px)
     ),
     var(--azulejo-tile) 0 0 / 40px 40px;
   -webkit-mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
@@ -1185,10 +1231,13 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 }
 /* Compass: each letter a small white tile; N is a cobalt diamond (drawn by ::before so the button keeps its size) */
 [data-appearance="azulejo"] .compass-letter {
-  border-radius: 3px;
+  border-radius: 4px;
   background: #fff;
   color: var(--cobalt);
-  box-shadow: inset 0 0 0 1.5px var(--cobalt);
+  box-shadow: inset 0 0 0 2px var(--cobalt);
+}
+[data-appearance="azulejo"] .compass.is-turned .compass-letter.is-north {
+  --radar: var(--cobalt);
 }
 [data-appearance="azulejo"] .compass-letter.is-north {
   background: transparent;
