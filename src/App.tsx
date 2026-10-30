@@ -28,12 +28,12 @@ import {
 // TPulso: offline timetable data layer, region config and display rule.
 import { LISBON, lineNameOf } from "../shared/region";
 import { withinRadius } from "../shared/geo";
-import { addDays, decodePolyline, type AreaFile, type LineShape, type LiveTripsFile, type PatternData, type RouteFile } from "../shared/timetable";
+import { addDays, type AreaFile, type LiveTripsFile, type PatternData, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
 import { activeTrips, departuresAtStop, expectedVehicles, isExpired, positionsAt, routePath, tripStopsForRow, upcomingStops, type ActiveTrip, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
-import { downloadRegion, loadLines, loadLiveTrips, loadRoute, regionBytes } from "@/offline/store";
+import { downloadRegion, loadLiveTrips, loadRoute, regionBytes } from "@/offline/store";
 import { linkTrip, liveOperators, liveState, liveVehicle, sliceFor } from "@/offline/live";
 import { useLiveBuses } from "@/lib/useLiveBuses";
 import { useTimetable } from "@/offline/useTimetable";
@@ -65,6 +65,10 @@ const withLineName = (op: string, line: string): { lineName?: string } => {
   const n = lineNameOf(region, op, line);
   return n ? { lineName: n } : {};
 };
+/** The "Ride this vehicle (test ride)" button: a developer tool, hidden from users (owner decision, UI review). */
+const SHOW_TEST_RIDE = false;
+/** No always-on route lines (owner decision: lines only for what was tapped). */
+const NO_LINES: TransitRoute[] = [];
 /** No operator with live buses (feed off or failing, or no live index in this timetable). */
 const NO_OPS: ReadonlySet<string> = new Set();
 
@@ -725,12 +729,12 @@ export default function App() {
     };
   }, [manifest, selectedPattern]);
 
-  // TPulso: whole route lines (first stop to terminus) from the route files, for every vehicle shown and the
-  // selected one — independent of the radar radius and of which map areas are loaded.
+  // TPulso: whole route lines (first stop to terminus) from the route files, only for what was tapped: the selected
+  // vehicle, or (with a stop open) the trips coming to it. Owner decision: no lines for every vehicle on the radar.
   const [routeFiles, setRouteFiles] = useState<Map<number, RouteFile>>(new Map());
   const shownPatterns = useMemo(
-    () => [...new Set([...(stopTripKeys ? stopPatternIds : radarVehicles.map((v) => Number(v.routeId))), ...(selectedPattern !== undefined ? [selectedPattern] : [])])],
-    [stopTripKeys, stopPatternIds, radarVehicles, selectedPattern],
+    () => [...new Set([...(stopTripKeys ? stopPatternIds : []), ...(selectedPattern !== undefined ? [selectedPattern] : [])])],
+    [stopTripKeys, stopPatternIds, selectedPattern],
   );
   useEffect(() => {
     if (!manifest) return;
@@ -791,23 +795,8 @@ export default function App() {
     return m;
   }, [shownPatterns, routeFiles, routeFile.route, opName]);
 
-  // TPulso: tram, metro, train and ferry lines of the whole region, visible at every radius (lines.json).
-  const [lineShapes, setLineShapes] = useState<LineShape[]>([]);
-  useEffect(() => {
-    if (!manifest) return;
-    let stop = false;
-    loadLines(manifest)
-      .then((f) => !stop && setLineShapes(f.lines))
-      .catch(() => !stop && setLineShapes([]));
-    return () => {
-      stop = true;
-    };
-  }, [manifest]);
-  const allBaseLines = useMemo(
-    () => lineShapes.map((l) => prepareRoute({ id: `line|${l.id}`, mode: l.mode, line: l.line, headsign: "", operator: "", path: decodePolyline(l.shape) })),
-    [lineShapes],
-  );
-  const baseLines = useMemo(() => (filter === "all" ? allBaseLines : allBaseLines.filter((l) => l.mode === filter)), [allBaseLines, filter]);
+  // TPulso, owner decision (UI review): no region-wide tram/metro/train/ferry lines on the map, at any radius (too
+  // many colours). A route line is drawn only for what was tapped: a vehicle, or a stop's coming trips.
   const selectedRoute = selected ? routes.get(`full|${selected.routeId}`) : undefined;
 
   // Vehicle pins: the patterns whose line has an alert in force.
@@ -976,8 +965,19 @@ export default function App() {
   };
 
   const showOverlay = gps === "pending" || (gps === "denied" && !testAccepted);
-  // TPulso: the always-visible source note (CLAUDE.md): all times are timetable; with live buses, say which part is live.
-  const sourceNote = liveActive ? "Timetable times · live GPS buses" : "Timetable data, not live";
+  // TPulso: the always-visible source note (CLAUDE.md), shortened to a chip (owner decision, UI review): all times are
+  // timetable; tapping it opens Help, which starts with the full note ("Timetable data, not live" / "Timetable times,
+  // live GPS buses").
+  const sourceChip = (
+    <button
+      type="button"
+      onClick={() => openPanel("help")}
+      aria-label={liveActive ? "Timetable times, live GPS buses: what this means" : "Timetable data, not live: what this means"}
+      className="inline-flex items-center gap-0.5 rounded border border-border px-1 align-middle text-[9px] font-bold uppercase tracking-wide text-muted-foreground"
+    >
+      Timetable <CircleHelp className="size-2.5" aria-hidden />
+    </button>
+  );
 
   // Phones: only the vehicle panel (its list of stops further along the line) can be raised over the map.
   const vehicleView = !!selected && panelView === "results";
@@ -1052,10 +1052,8 @@ export default function App() {
                 Test ride{ride.speed > 1 ? ` · ${ride.speed}× clock` : ""}
               </span>
             )}
-            {/* TPulso offline: always say this is not live (on phones: at the start of the status row) */}
-            <span className="hidden rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground md:inline">
-              {sourceNote}
-            </span>
+            {/* TPulso: the data-source note, short; tap explains it (Help). On phones: at the start of the status row. */}
+            <span className="hidden md:inline">{sourceChip}</span>
           </h1>
           <p className="hidden truncate text-[10px] text-muted-foreground md:block">{statusLine}</p>
         </div>
@@ -1091,7 +1089,7 @@ export default function App() {
           </button>
         </div>
         <p className="w-full truncate text-[10px] leading-tight text-muted-foreground md:hidden">
-          <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">{sourceNote}</span>
+          <span className="mr-1">{sourceChip}</span>
           {place}
           {timetableProblem}
           {liveProblem}
@@ -1198,7 +1196,7 @@ export default function App() {
                 onPick={tapPlatform}
                 onArea={onArea}
                 areaCloseRequest={areaCloseRequest}
-                baseLines={baseLines}
+                baseLines={NO_LINES}
                 alertPatterns={alertPatterns}
                 liveVehicles={liveList}
                 hiddenOps={hiddenOps}
@@ -1326,7 +1324,7 @@ export default function App() {
           onShowAlerts={alertsView ? () => openPanel("alerts") : undefined}
           tripStops={tripStops}
           onToggleTrip={toggleTrip}
-          onRide={gps === "denied" && !ride ? startRide : undefined}
+          onRide={SHOW_TEST_RIDE && gps === "denied" && !ride ? startRide : undefined}
           ride={
             ride
               ? {

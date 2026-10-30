@@ -15,6 +15,7 @@ A mobile-first web app (installable PWA) that shows buses and stops around the u
   - **Expected**: a vehicle's position calculated from the timetable; dashed outline (pin and dot).
   - Live, Estimated and Stale (below) apply only when the live feature flag (`LIVE_ENABLED` / `VITE_LIVE`) is on; it is off.
   - Exception (2026-10-30, docs/LIVE.md): with `LIVE_VEHICLES_ENABLED` on, Carris Metropolitana **bus positions** are Live/Stale GPS (linked to their timetable trip by exact trip_id). All times stay Scheduled; the note then reads "Timetable times · live GPS buses". Owner decision: buses without open GPS (Carris city, TCB, MobiCascais) stay on the map as Expected; a Carris Metropolitana trip without a GPS bus is not drawn while the feed works. No extra colour for live buses (four mode colours only).
+  - Owner decision (UI review, 2026-10-30): the note is shown as a short "Timetable" chip in the top bar; tapping it opens Help, which starts with the full note. Route lines are drawn only for what was tapped; vehicles outside the radar circle are not drawn.
 - Data-source display rule for the live version (flag off; every departure and every vehicle shows its source; logic in `src/lib/sourceStatus.ts`):
   - **Live**: green, solid, pulsing dot; time like "3 min".
   - **Scheduled**: blue-grey, outline-only dot; time like "~3 min".

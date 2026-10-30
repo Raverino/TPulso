@@ -54,7 +54,7 @@ export function AlertNote({ label, onOpen }: { label: string; onOpen?: (() => vo
         e.stopPropagation();
         onOpen?.();
       }}
-      className="alert-text flex items-center gap-1 text-[10px] font-semibold"
+      className="alert-text flex items-center gap-1 text-[11px] font-semibold"
     >
       <TriangleAlert className="size-2.5 shrink-0" aria-hidden />
       <span className="truncate">{label}</span>
@@ -65,15 +65,18 @@ export function AlertNote({ label, onOpen }: { label: string; onOpen?: (() => vo
 /** In the vehicle panel: the alerts on this vehicle's line. */
 export function VehicleAlerts({ alerts, onOpen }: { alerts: ServiceAlert[]; onOpen?: (() => void) | undefined }) {
   if (!alerts.length) return null;
+  // TPulso: one line (UI review: the full box took a third of the panel); the alerts open in their own list.
   return (
-    <button type="button" onClick={onOpen} className="alert-box mx-3 mb-2 block w-[calc(100%-1.5rem)] rounded-xl px-3 py-2 text-left text-[11px]">
-      <span className="flex items-center gap-1.5 font-display text-xs font-bold">
-        <TriangleAlert className="size-3.5 shrink-0" aria-hidden /> Service alert on this line{alerts.length > 1 ? ` · ${alerts.length}` : ""}
+    <button
+      type="button"
+      onClick={onOpen}
+      className="alert-box mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-xl px-3 py-1.5 text-left font-display text-xs font-bold"
+    >
+      <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+      <span className="flex-1">
+        {alerts.length === 1 ? "1 service alert on this line" : `${alerts.length} service alerts on this line`}
       </span>
-      {alerts.slice(0, 2).map((a) => (
-        <span key={a.id} className="mt-0.5 block truncate">{a.title}</span>
-      ))}
-      <span className="mt-0.5 block font-semibold underline-offset-2">All alerts here →</span>
+      <span aria-hidden>›</span>
     </button>
   );
 }
@@ -108,7 +111,7 @@ export function AlertsPanel({ view, now, onClose }: { view: AlertsView; now: num
                 {SOURCE_FULL[s.id]} could not be loaded right now; they may be missing here.
               </p>
             ))}
-            <h3 className="mt-4 mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">In force · {view.current.length}</h3>
+            <h3 className="mt-4 mb-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">In force · {view.current.length}</h3>
             {view.current.length === 0 && <p className="text-muted-foreground">No alerts for the lines, stops and operators in your radar.</p>}
             <ul className="space-y-2.5">
               {view.current.map((c) => (
@@ -117,7 +120,7 @@ export function AlertsPanel({ view, now, onClose }: { view: AlertsView; now: num
             </ul>
             {view.announced.length > 0 && (
               <>
-                <h3 className="mt-5 mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Announced · {view.announced.length}</h3>
+                <h3 className="mt-5 mb-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Announced · {view.announced.length}</h3>
                 <ul className="space-y-2.5 opacity-80">
                   {view.announced.map((c) => (
                     <AlertItem key={c.alert.id} c={c} now={now} receivedAt={view.receivedAt!} />
@@ -157,7 +160,7 @@ function AlertItem({ c, now, receivedAt }: { c: AlertCard; now: number; received
           )}
         </div>
       )}
-      <span className="block text-[10px] text-muted-foreground">
+      <span className="block text-[11px] text-muted-foreground">
         {SOURCE_NAME[a.source]} · updated {agoText(receivedAt, now)}
         {!open && a.description ? " · tap for details" : ""}
       </span>

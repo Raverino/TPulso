@@ -4,6 +4,7 @@ import { MODE_COLORS } from "@/config";
 import {
   ArrowLeft,
   Bus,
+  ChevronDown,
   CircleHelp,
   Download,
   Flag,
@@ -401,7 +402,7 @@ export default function ArrivalsDrawer({
                             <span className="truncate text-xs text-foreground/80">{v.headsign || "destination not available"}</span>
                           </div>
                           {/* TPulso: position source (timetable, or live GPS) */}
-                          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                             <PositionSource fixAt={v.fixAt} />
                           </div>
                         </div>
@@ -439,7 +440,14 @@ export default function ArrivalsDrawer({
                         </p>
                       )}
                       <ul className={`space-y-1 ${showDep ? "" : "hidden"}`}>
-                        {group.map((a) => {
+                        {/* TPulso: grouped by stop (nearest first): the stop name and distance once, in its header. */}
+                        {byStop(group).flatMap((s) => [
+                          <li key={`stop:${s.key}`} className="stop-head flex items-center gap-1.5 px-1 pt-2 text-[11px] font-semibold text-foreground/80">
+                            <Footprints className="size-3 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{s.name}</span>
+                            <span className="shrink-0 font-normal text-muted-foreground">· {s.distanceM} m</span>
+                          </li>,
+                          ...s.rows.map((a) => {
                           const Icon = ICONS[a.mode];
                           const state = depState(a.realtime, boardAgeSec);
                           const at = Math.round((a.expectedAt ?? now) / 1000);
@@ -470,13 +478,7 @@ export default function ArrivalsDrawer({
                                     {a.headsign}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-1 truncate text-[10px] text-muted-foreground">
-                                  <Footprints className="size-2.5 shrink-0" />
-                                  <span className="truncate">
-                                    {a.stopName} · {a.distanceM} m ·{" "}
-                                    {a.lineName ? `Metro ${a.lineName}` : MODE_LABEL[a.mode]}
-                                  </span>
-                                </div>
+                                {a.lineName && <div className="truncate text-[11px] text-muted-foreground">Metro {a.lineName}</div>}
                                 {a.alert && <AlertNote label={a.alert} onOpen={onShowAlerts} />}
                               </div>
                               <div className="shrink-0 text-right">
@@ -487,13 +489,12 @@ export default function ArrivalsDrawer({
                                     <Countdown atSec={at} state={state} />
                                   </span>
                                 </div>
-                                <div className="mt-0.5 text-[9px] text-muted-foreground">
-                                  {state === "stale"
-                                    ? `last seen ${agoLabel(boardAgeSec)} ago`
-                                    : state === "scheduled"
-                                      ? "scheduled"
-                                      : <DelayText delayMin={a.delayMin} />}
-                                </div>
+                                {/* "~" already marks a timetable time (and the legend explains it): no "scheduled" word. */}
+                                {state !== "scheduled" && (
+                                  <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                    {state === "stale" ? `last seen ${agoLabel(boardAgeSec)} ago` : <DelayText delayMin={a.delayMin} />}
+                                  </div>
+                                )}
                               </div>
                               {onPin && (
                                 <button
@@ -533,7 +534,8 @@ export default function ArrivalsDrawer({
                               )}
                             </li>
                           );
-                        })}
+                          }),
+                        ])}
                       </ul>
                     </section>
                   ),
@@ -924,13 +926,13 @@ const SignalCard = memo(function SignalCard({ fixAt }: { fixAt?: number | undefi
   if (fixAt === undefined) {
     return (
       <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
-        <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
           <MapPin className="size-3" /> Position
         </div>
         <div className="flex items-center gap-1.5 font-display text-sm font-bold">
           <SourceDot state="expected" /> From the timetable
         </div>
-        <div className="text-[10px] text-muted-foreground">no GPS from this operator</div>
+        <div className="text-[11px] text-muted-foreground">no GPS from this operator</div>
       </div>
     );
   }
@@ -938,13 +940,13 @@ const SignalCard = memo(function SignalCard({ fixAt }: { fixAt?: number | undefi
   const note = stale ? "it may have moved since" : ageSec <= 60 ? "position is current" : "position about 1–2 min old";
   return (
     <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
         <Satellite className="size-3" /> Last GPS signal
       </div>
       <div className="flex items-center gap-1.5 font-display text-sm font-bold">
         <SourceDot state={stale ? "stale" : "live"} /> {agoLabel(ageSec)} ago
       </div>
-      <div className="truncate text-[10px] text-muted-foreground">
+      <div className="truncate text-[11px] text-muted-foreground">
         at {clockSec(fixAt)} · {note}
       </div>
     </div>
@@ -968,7 +970,7 @@ function TripCard({
   const nowSec = Math.floor(now / 1000);
   return (
     <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
         <CardIcon className="size-3" /> {title}
       </div>
       {stop ? (
@@ -1006,22 +1008,40 @@ function StopSection({
   now: number;
 }) {
   const nowSec = Math.floor(now / 1000);
+  // TPulso: the first few stops, the rest on request (a line can have 40+ stops ahead).
+  const [all, setAll] = useState(false);
+  const shown = all ? stops : stops.slice(0, STOPS_FIRST);
   return (
     <section>
       <div className="sticky top-0 z-10 flex items-baseline justify-between border-t border-border bg-surface px-4 py-2">
         <h3 className="font-display text-xs font-bold">{title}</h3>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[11px] text-muted-foreground">
           {stops.length ? `${stops.length}` : ""}
         </span>
       </div>
       {stops.length === 0 ? (
         <p className="px-4 py-3 text-center text-xs text-muted-foreground">{empty}</p>
       ) : (
-        <TripStopList stops={stops} accent={accent} nowSec={nowSec} showAhead />
+        <>
+          <TripStopList stops={shown} accent={accent} nowSec={nowSec} showAhead />
+          {stops.length > STOPS_FIRST && (
+            <button
+              type="button"
+              onClick={() => setAll((v) => !v)}
+              className="mx-auto mt-1 flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold text-primary"
+            >
+              {all ? "Show fewer stops" : `Show all ${stops.length} stops`}
+              <ChevronDown className={`size-3.5 ${all ? "rotate-180" : ""}`} aria-hidden />
+            </button>
+          )}
+        </>
       )}
     </section>
   );
 }
+const STOPS_FIRST = 5;
+/** Distances further than this are not shown ("6397 m ahead" means little); the time says enough. */
+const AHEAD_SHOWN_M = 1000;
 
 /** The stop list of the vehicle panel, shared with expanded departure rows. */
 function TripStopList({
@@ -1054,8 +1074,8 @@ function TripStopList({
                 {u.name}
                 {u.key === yourKey && <span className="ml-1.5 rounded bg-foreground/15 px-1 text-[9px] font-bold uppercase">your stop</span>}
               </div>
-              {showAhead && <div className="text-[10px] text-muted-foreground">{u.aheadM} m ahead</div>}
-              {hi && !showAhead && <div className="text-[10px] text-muted-foreground">next stop</div>}
+              {showAhead && u.aheadM <= AHEAD_SHOWN_M && <div className="text-[11px] text-muted-foreground">{u.aheadM} m ahead</div>}
+              {hi && !showAhead && <div className="text-[11px] text-muted-foreground">next stop</div>}
             </div>
             {/* TPulso: one source state per stop time */}
             <span
@@ -1171,7 +1191,7 @@ function StopDetails({
               if (!rows.length) return null;
               return (
                 <section key={mode}>
-                  <h3 className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  <h3 className="px-2 pb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                     {MODE_LABEL[mode]} · {rows.length}
                   </h3>
           <ul className="space-y-1">
@@ -1188,7 +1208,7 @@ function StopDetails({
                       <span className="font-display text-xs font-bold">{d.line}</span>{" "}
                       <span className="text-xs text-foreground/80">{d.destination}</span>
                     </div>
-                    {d.lineName && <div className="text-[10px] text-muted-foreground">Metro {d.lineName}</div>}
+                    {d.lineName && <div className="text-[11px] text-muted-foreground">Metro {d.lineName}</div>}
                     {d.alert && <AlertNote label={d.alert} onOpen={onShowAlerts} />}
                   </div>
                   <div className="shrink-0 text-right">
@@ -1283,7 +1303,7 @@ function RideCard({ ride }: { ride: RideInfo }) {
         </>
       )}
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[10px] text-muted-foreground">Ride clock</span>
+        <span className="text-[11px] text-muted-foreground">Ride clock</span>
         <div className="flex gap-0.5 rounded-lg bg-background/60 p-0.5" role="group" aria-label="Ride speed">
           {([1, 5, 10] as const).map((s) => (
             <button
@@ -1298,7 +1318,7 @@ function RideCard({ ride }: { ride: RideInfo }) {
         </div>
       </div>
       <div className="mt-1.5 flex items-center justify-between">
-        <span className="text-[10px] text-muted-foreground">Map direction</span>
+        <span className="text-[11px] text-muted-foreground">Map direction</span>
         <button
           type="button"
           onClick={() => ride.onHeadingUp(!ride.headingUp)}
@@ -1346,7 +1366,7 @@ function FollowCard({
             {pinned.line}{" "}
             <span className="font-medium text-foreground/75">→ {pinned.destination}</span>
           </div>
-          <div className="truncate text-[10px] text-muted-foreground">at {pinned.stopName}</div>
+          <div className="truncate text-[11px] text-muted-foreground">at {pinned.stopName}</div>
         </div>
         <div className="shrink-0 text-right">
           {dep ? (
@@ -1355,7 +1375,7 @@ function FollowCard({
                 <SourceDot state={state} />
                 {dep.cancelled ? "—" : `${state === "live" ? "" : "~"}${mins === 0 ? "now" : mins}`}
                 {!dep.cancelled && mins !== 0 && (
-                  <span className="ml-0.5 text-[10px] font-medium">min</span>
+                  <span className="ml-0.5 text-[11px] font-medium">min</span>
                 )}
               </div>
               <div className="text-[9px]">
@@ -1367,7 +1387,7 @@ function FollowCard({
               </div>
             </>
           ) : (
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-[11px] text-muted-foreground">
               no longer
               <br />
               on the board
@@ -1385,7 +1405,7 @@ function FollowCard({
           <PinOff className="size-3.5" />
         </button>
       </div>
-      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+      <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
         <span>
           {dep
             ? `Scheduled ${clock(dep.plannedAt)}${dep.realtime ? ` · expected ${clock(dep.expectedAt)}` : ""}`
@@ -1403,18 +1423,36 @@ function FollowCard({
   );
 }
 
-/** A list section's header: tap to open or close it. Sticky, so it stays reachable while its list scrolls. */
+/** Departures grouped by their stop, nearest stop first; each group keeps the soonest-first order. */
+function byStop(rows: readonly Arrival[]): { key: string; name: string; distanceM: number; rows: Arrival[] }[] {
+  const m = new Map<string, { key: string; name: string; distanceM: number; rows: Arrival[] }>();
+  for (const a of rows) {
+    const key = a.stopArea ?? a.stopId;
+    let g = m.get(key);
+    if (!g) m.set(key, (g = { key, name: a.stopName, distanceM: a.distanceM, rows: [] }));
+    g.rows.push(a);
+  }
+  return [...m.values()].sort((x, y) => x.distanceM - y.distanceM);
+}
+
+/**
+ * A list section's header: a centred drop-down button (tap to open or close; the arrow turns). Sticky, so it stays
+ * reachable while its list scrolls.
+ */
 function Toggle({ label, open, onChange }: { label: string; open: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="sticky -top-2 z-10 -mx-2 flex cursor-pointer select-none items-center gap-1.5 bg-surface px-4 py-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-      <input
-        type="checkbox"
-        checked={open}
-        onChange={(e) => onChange(e.target.checked)}
-        className="size-3 accent-[var(--primary)]"
-        aria-label={`Show ${label}`}
-      />
-      {label}
-    </label>
+    <div className="sticky -top-2 z-10 -mx-2 bg-surface px-2 py-1.5">
+      <button
+        type="button"
+        onClick={() => onChange(!open)}
+        aria-expanded={open}
+        className={`section-toggle flex w-full items-center justify-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide transition-colors ${
+          open ? "border-primary/40 bg-primary/10 text-foreground" : "border-border bg-surface-2/70 text-muted-foreground"
+        }`}
+      >
+        {label}
+        <ChevronDown className={`size-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`} aria-hidden />
+      </button>
+    </div>
   );
 }

@@ -664,7 +664,9 @@ function VehicleAnimator({
       for (const key of glides.keys()) if (!liveKeys.has(key)) glides.delete(key);
       for (const key of tracks.keys()) if (!liveKeys.has(key)) tracks.delete(key);
       let shownList = [...positionsAt(near, t), ...liveShown].map((v) => ({ v, d: Math.hypot((v.lat - centre.lat) * 111_320, (v.lng - centre.lng) * 111_320 * k) }));
-      if (!f.keys) shownList = shownList.filter((x) => x.d <= margin || x.v.key === ride);
+      // Only vehicles inside the circle (owner decision: the area outside is darkened, nothing is drawn there); a
+      // selected vehicle or an open stop's vehicles are shown wherever they are.
+      if (!f.keys) shownList = shownList.filter((x) => x.d <= r || x.v.key === ride);
       // Cap the DOM markers: the nearest ones (the ridden one always) when a busy area has too many.
       if (shownList.length > MAX_VEHICLE_MARKERS) shownList = shownList.sort((a, b) => (a.v.key === ride ? -1 : b.v.key === ride ? 1 : a.d - b.d)).slice(0, MAX_VEHICLE_MARKERS);
       // Pins that would cover each other (two buses at one stop, Metro trains at a platform pair) are pushed
@@ -1487,7 +1489,8 @@ export default memo(function TransitMap({
   const clear = useCallback(() => onSelect(null), [onSelect]);
 
   return (
-    <div ref={rootRef} className="relative h-full w-full">
+    // TPulso: at wide radii (500/1000 m) stops are drawn small and plain too (styles.css .is-compact).
+    <div ref={rootRef} className={`relative h-full w-full ${radius >= COMPACT_FROM_M ? "is-compact" : ""}`}>
     <MapContainer
       ref={setLeafletMap}
       // TPulso: rotation (leaflet-rotate); our own twist handler and compass replace its touch rotate and control.
@@ -1607,6 +1610,8 @@ export default memo(function TransitMap({
     </MapContainer>
       {/* TPulso: the radar disc and bezel are a screen overlay; they never capture drags or taps. */}
       <div ref={discRef} className="radar-disc" aria-hidden />
+      {/* Half the radius, labelled ("500 m"): to judge distances at a glance. */}
+      <div className="radar-half" data-label={`${radius / 2} m`} aria-hidden />
       <div className="sonar-bezel" aria-hidden />
       {/* The ring's ticks turn with the map as one compositor layer (transform), never repainted per step. */}
       <div className="sonar-ticks" aria-hidden />

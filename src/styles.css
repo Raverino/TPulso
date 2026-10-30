@@ -318,6 +318,38 @@
       oklch(0.11 0.012 258) 100%
     );
 }
+/* TPulso: a faint dashed circle at half the radius, labelled ("500 m"), to judge distances inside the radar. */
+.radar-half {
+  position: absolute;
+  z-index: 449;
+  left: calc(var(--x) - var(--r) / 2);
+  top: calc(var(--y) - var(--r) / 2);
+  width: var(--r);
+  height: var(--r);
+  border-radius: 9999px;
+  border: 1px dashed color-mix(in oklch, var(--radar) 45%, transparent);
+  pointer-events: none;
+}
+.radar-half::after {
+  content: attr(data-label);
+  position: absolute;
+  left: 50%;
+  top: 0;
+  translate: -50% -50%;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: color-mix(in oklch, var(--background) 80%, transparent);
+  color: var(--muted-foreground);
+  font: 600 9px/1.5 var(--font-sans), sans-serif;
+  white-space: nowrap;
+}
+/* TPulso, wide radii (500/1000 m): stops are small plain rings; a group shows no count (tap opens it). */
+.is-compact .station:not(.is-selected) {
+  --size: 12px !important;
+}
+.is-compact .area-count {
+  display: none;
+}
 /* TPulso: the ring's ticks are their own layer, turned with a transform (no repaint while the map turns). */
 .sonar-ticks {
   position: absolute;
@@ -1262,6 +1294,8 @@ button.is-pressed:not(:disabled):not(.compass-letter),
       var(--cobalt) calc(var(--r) + 19px),
       transparent calc(var(--r) + 19px)
     ),
+    /* Outside the radar the tiles are veiled, so the disc is the bright focus (owner decision). */
+    radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) + 19px), oklch(0.22 0.06 262 / 0.45) calc(var(--r) + 19.5px)),
     var(--azulejo-tile) 0 0 / 40px 40px;
   -webkit-mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
   mask: radial-gradient(circle at var(--x) var(--y), transparent calc(var(--r) - 1px), #000 calc(var(--r) - 0.5px));
@@ -1477,6 +1511,23 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   border-radius: 9999px;
   rotate: none;
   box-shadow: none;
+}
+/* Wide radii (500/1000 m): station groups small and plain here too (tap opens them). */
+[data-appearance="azulejo"] .is-compact .area-point::before {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+}
+[data-appearance="azulejo"] .is-compact .area-point .station-ring {
+  width: 10px;
+  height: 10px;
+  -webkit-mask: radial-gradient(circle, transparent 0 2.5px, #000 3px);
+  mask: radial-gradient(circle, transparent 0 2.5px, #000 3px);
+  box-shadow: none;
+}
+[data-appearance="azulejo"] .is-compact .area-point .station-core {
+  width: 6px;
+  height: 6px;
 }
 [data-appearance="azulejo"] .area-count {
   z-index: 1;

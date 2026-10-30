@@ -75,7 +75,7 @@ export function Legend({ alerts = false, live = false, variant = 'box' }: { aler
   if (variant === 'strip') {
     return (
       <ul
-        className="legend-strip flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-b border-border bg-surface px-3 py-1 text-[10px] leading-tight text-foreground/85"
+        className="legend-strip flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-b border-border bg-surface px-3 py-1 text-[11px] leading-tight text-foreground/85"
         aria-label="Legend"
       >
         {items}
@@ -84,7 +84,7 @@ export function Legend({ alerts = false, live = false, variant = 'box' }: { aler
   }
   return (
     <ul
-      className="space-y-0.5 rounded-xl border border-border bg-surface/90 px-2 py-1.5 text-[10px] leading-tight text-foreground/85 shadow-float backdrop-blur-sm"
+      className="space-y-0.5 rounded-xl border border-border bg-surface/90 px-2 py-1.5 text-[11px] leading-tight text-foreground/85 shadow-float backdrop-blur-sm"
       aria-label="Legend"
     >
       {items}
