@@ -25,6 +25,7 @@ import { useAppearance } from "@/appearance";
 import { clusterScreen, initialsOf, letterFor, letterOrder, shortLabel, spreadOffsets, uniqueInitials } from "@/offline/stations";
 import { patternBox, pointAlong, positionsAt, type ActiveTrip, type ExpectedVehicle } from "@/offline/engine";
 import { trackAlong, trackUpdate, type Track } from "@/offline/live";
+import { LISBON } from "../../../shared/region";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
   bus: "BUS",
@@ -32,6 +33,9 @@ const MODE_GLYPH: Record<Vehicle["mode"], string> = {
   tram: "TRM",
   ferry: "FRY",
 };
+/** TPulso: metro trains are "tram" mode (one colour) but read "MET" on their pin, so they are not taken for trams. */
+const METRO_OPS: ReadonlySet<string> = new Set(LISBON.metroOperators);
+const glyphOf = (mode: Vehicle["mode"], op: string) => (METRO_OPS.has(op) ? "MET" : MODE_GLYPH[mode]);
 
 const esc = (s: string) => s.replace(/[<>&"']/g, "");
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -170,9 +174,9 @@ const iconCache = new Map<string, L.DivIcon>();
 /** Where a pin's position comes from: the timetable (Expected, dashed) or a GPS fix (Live / Stale, docs/LIVE.md). */
 type PinSource = "expected" | "live" | "stale";
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
-function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected") {
+function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected", glyph = MODE_GLYPH[v.mode]) {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}|${source}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}|${source}|${glyph}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   // The pin is drawn 34 px and scaled to 90 % with CSS zoom (.vehicle-marker .vehicle-pin): 31 px box.
@@ -185,7 +189,7 @@ function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected") 
     // TPulso: the pin colour comes only from the mode (src/config.ts MODE_COLORS).
     html: `<div class="vehicle-pin is-${source}" data-mode="${v.mode}">
         <span class="src-dot src-${source} pin-src"></span>
-        <span class="pin-glyph" style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
+        <span class="pin-glyph" style="font-size:8px;opacity:.7">${glyph}</span>
         <span class="pin-line">${esc(v.line)}</span>
         ${unknown ? `<span class="unknown-badge">?</span>` : ""}
         ${alert ? `<span class="pin-alert" aria-label="Service alert on this line">${ALERT_SVG}Alert</span>` : ""}
@@ -692,7 +696,7 @@ function VehicleAnimator({
         if (m) {
           m.setLatLng(at);
           if (badged.get(v.key) !== look) {
-            m.setIcon(vehicleIcon(veh(), alert, source));
+            m.setIcon(vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op)));
             m.getElement()?.setAttribute("title", title);
             m.setZIndexOffset(v.key === ride ? 1500 : source === "expected" ? 600 : 700);
             badged.set(v.key, look);
@@ -700,7 +704,7 @@ function VehicleAnimator({
         } else {
           badged.set(v.key, look);
           const marker = L.marker(at, {
-            icon: vehicleIcon(veh(), alert, source),
+            icon: vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op)),
             title,
             // Live pins above timetable ones.
             zIndexOffset: v.key === ride ? 1500 : source === "expected" ? 600 : 700,

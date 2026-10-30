@@ -45,6 +45,8 @@ export interface Vehicle {
   tripId: string;
   /** The operator has no line or route data for this vehicle today. */
   routeUnavailable?: boolean;
+  /** TPulso: full line name when the code is not self-explanatory ("Linha Azul" for Metro "Az"). */
+  lineName?: string;
 }
 
 export interface Stop {
@@ -78,6 +80,8 @@ export interface Arrival {
   skipped?: boolean;
   /** TPulso: "Line alert · Metro de Lisboa" when a service alert concerns this departure. */
   alert?: string | undefined;
+  /** TPulso: full line name when the code is not self-explanatory ("Linha Azul" for Metro "Az"). */
+  lineName?: string;
 }
 
 /** A departure as delivered by the board (here: mapped from /api/board). */
@@ -102,6 +106,8 @@ export interface LiveDeparture {
   skipped?: boolean;
   /** TPulso: "Line alert · Metro de Lisboa" when a service alert concerns this departure. */
   alert?: string | undefined;
+  /** TPulso: full line name when the code is not self-explanatory ("Linha Azul" for Metro "Az"). */
+  lineName?: string;
 }
 
 /** The connection the user follows. */

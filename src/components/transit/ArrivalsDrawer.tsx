@@ -14,6 +14,7 @@ import {
   Pin,
   PinOff,
   Radio,
+  Satellite,
   Ship,
   TrainFront,
   TramFront,
@@ -21,6 +22,7 @@ import {
 import {
   MODE_LABEL,
   clock,
+  clockSec,
   isUnknownRoute,
   type Arrival,
   type LiveDeparture,
@@ -470,7 +472,7 @@ export default function ArrivalsDrawer({
                                   <Footprints className="size-2.5 shrink-0" />
                                   <span className="truncate">
                                     {a.stopName} · {a.distanceM} m ·{" "}
-                                    {MODE_LABEL[a.mode]}
+                                    {a.lineName ? `Metro ${a.lineName}` : MODE_LABEL[a.mode]}
                                   </span>
                                 </div>
                                 {a.alert && <AlertNote label={a.alert} onOpen={onShowAlerts} />}
@@ -704,6 +706,10 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
         <HelpSection title="Symbols">
           <HelpRow icon={<Bus className="size-4" />} title="Yellow" text="Bus" tone="bg-bus" />
           <HelpRow icon={<TramFront className="size-4" />} title="Purple" text="Tram or metro" tone="bg-tram" />
+          <p className="text-muted-foreground">
+            Metro lines are shown by their codes, with “MET” on the map: <strong>Az</strong> Linha Azul, <strong>Am</strong> Linha Amarela,{" "}
+            <strong>Vd</strong> Linha Verde, <strong>Vm</strong> Linha Vermelha. Trams (Carris) have numbers ending in E, like 28E.
+          </p>
           <HelpRow icon={<TrainFront className="size-4" />} title="Blue" text="Train (CP, Fertagus)" tone="bg-train" />
           <HelpRow icon={<Ship className="size-4" />} title="Red" text="Ferry" tone="bg-ferry" />
           <p className="text-muted-foreground">Each kind of transport always has the same colour and its own symbol. Stations show a ring in the colours of the transport that stops there.</p>
@@ -827,7 +833,6 @@ function VehicleDetails({
   const Icon = ICONS[v.mode];
   // The remaining stops of this trip in route order (inside and outside the radar together).
   const rest = [...upcoming, ...beyond].sort((a, b) => a.aheadM - b.aheadM);
-  const nextStop = rest[0];
   const lastStop = rest.length > 1 ? rest[rest.length - 1] : undefined;
   return (
     <>
@@ -851,8 +856,7 @@ function VehicleDetails({
             {v.line} <span className="font-medium text-foreground/70">→ {v.headsign || "—"}</span>
           </div>
           <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
-            {(r?.operator || v.operator) ?? ""} · {MODE_LABEL[v.mode]} ·{" "}
-            <PositionSource fixAt={v.live ? v.fixAt : undefined} />
+            {(r?.operator || v.operator) ?? ""} · {v.lineName ? `Metro · ${v.lineName}` : MODE_LABEL[v.mode]}
           </div>
         </div>
       </div>
@@ -866,9 +870,9 @@ function VehicleDetails({
           </div>
         </div>
       )}
-      {/* TPulso: where this vehicle goes next and when it reaches the end of its line (timetable times). */}
+      {/* TPulso: how fresh its position is (last GPS signal, or timetable), and when it reaches the end of its line. */}
       <div className="grid grid-cols-2 gap-2 px-3 pb-3">
-        <TripCard title="Next stop" icon={MapPin} stop={nextStop} now={now} routeStatus={routeStatus} />
+        <SignalCard fixAt={v.live ? v.fixAt : undefined} />
         <TripCard title="End of line" icon={Flag} stop={lastStop} now={now} routeStatus={routeStatus} />
       </div>
 
@@ -903,6 +907,43 @@ function VehicleDetails({
     </>
   );
 }
+
+/**
+ * TPulso: how much to trust the vehicle's position. Live bus: when its last GPS signal came (age and clock time)
+ * and what that means: up to 1 min reliable, up to 2 min about that old, then Stale (it may have moved since).
+ * Any other vehicle: its position is calculated from the timetable (its operator publishes no GPS).
+ */
+const SignalCard = memo(function SignalCard({ fixAt }: { fixAt?: number | undefined }) {
+  const ageSec = useClock(() => (fixAt === undefined ? -1 : Math.max(0, Math.floor((Date.now() - fixAt) / 1000))), [fixAt]);
+  if (fixAt === undefined) {
+    return (
+      <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
+        <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <MapPin className="size-3" /> Position
+        </div>
+        <div className="flex items-center gap-1.5 font-display text-sm font-bold">
+          <SourceDot state="expected" /> From the timetable
+        </div>
+        <div className="text-[10px] text-muted-foreground">no GPS from this operator</div>
+      </div>
+    );
+  }
+  const stale = ageSec > LIVE_STALE_AFTER_S;
+  const note = stale ? "it may have moved since" : ageSec <= 60 ? "position is current" : "position about 1–2 min old";
+  return (
+    <div className="min-w-0 rounded-xl bg-surface-2/70 px-3 py-2">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <Satellite className="size-3" /> Last GPS signal
+      </div>
+      <div className="flex items-center gap-1.5 font-display text-sm font-bold">
+        <SourceDot state={stale ? "stale" : "live"} /> {agoLabel(ageSec)} ago
+      </div>
+      <div className="truncate text-[10px] text-muted-foreground">
+        at {clockSec(fixAt)} · {note}
+      </div>
+    </div>
+  );
+});
 
 /** TPulso: one stop of the selected trip with its scheduled countdown and clock time (Lisbon). */
 function TripCard({
@@ -1141,6 +1182,7 @@ function StopDetails({
                       <span className="font-display text-xs font-bold">{d.line}</span>{" "}
                       <span className="text-xs text-foreground/80">{d.destination}</span>
                     </div>
+                    {d.lineName && <div className="text-[10px] text-muted-foreground">Metro {d.lineName}</div>}
                     {d.alert && <AlertNote label={d.alert} onOpen={onShowAlerts} />}
                   </div>
                   <div className="shrink-0 text-right">

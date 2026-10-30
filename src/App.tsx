@@ -26,7 +26,7 @@ import {
   type Vehicle,
 } from "@/lib/transit";
 // TPulso: offline timetable data layer, region config and display rule.
-import { LISBON } from "../shared/region";
+import { LISBON, lineNameOf } from "../shared/region";
 import { withinRadius } from "../shared/geo";
 import { addDays, decodePolyline, type AreaFile, type LineShape, type LiveTripsFile, type PatternData, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
@@ -60,6 +60,11 @@ const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | 
   stopKindLabel([...new Set(members.flatMap((m) => m.dir?.modes ?? ["bus" as const]))]);
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
+/** `{ lineName }` for a line whose code needs its full name (Metro "Az" -> "Linha Azul"), else nothing. */
+const withLineName = (op: string, line: string): { lineName?: string } => {
+  const n = lineNameOf(region, op, line);
+  return n ? { lineName: n } : {};
+};
 /** No operator with live buses (feed off or failing, or no live index in this timetable). */
 const NO_OPS: ReadonlySet<string> = new Set();
 
@@ -315,6 +320,7 @@ export default function App() {
       tripId: v.key,
       live: !!v.live,
       ...(v.live ? { fixAt: v.live.fixAt } : {}),
+      ...withLineName(v.op, v.line),
     }),
     [opName],
   );
@@ -341,6 +347,7 @@ export default function App() {
       delaySec: 0,
       realtime: false,
       cancelled: false,
+      ...withLineName(d.op, d.line),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [center.lat, center.lng, opName],
@@ -486,6 +493,7 @@ export default function App() {
         realtime: false,
         cancelled: false,
         ...(v ? { vehicleId: v.id } : {}),
+        ...(d.lineName ? { lineName: d.lineName } : {}),
         alert: alertLabelFor(d),
       });
     }

@@ -15,6 +15,11 @@ export interface RegionConfig {
   modesWithData: readonly TransportMode[];
   /** Operators whose tram-mode lines are a metro: their stops are merged into stations like trains. */
   metroOperators: readonly string[];
+  /**
+   * Full names of lines whose code alone is not understood (manifest operator id -> line code -> name), shown next
+   * to the code. Display only: nothing is linked by these names.
+   */
+  lineNames: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 export const LISBON: RegionConfig = {
@@ -30,7 +35,14 @@ export const LISBON: RegionConfig = {
   modesWithData: ['bus'],
   // Metro de Lisboa (manifest operator id): one station per metro stop, not one platform per direction.
   metroOperators: ['metro'],
+  // Metro de Lisboa's line codes (its GTFS route_short_name): Azul, Amarela, Verde, Vermelha.
+  lineNames: { metro: { Az: 'Linha Azul', Am: 'Linha Amarela', Vd: 'Linha Verde', Vm: 'Linha Vermelha' } },
 };
+
+/** The full name of a line (e.g. "Linha Azul" for Metro "Az"), or undefined when its code is the name. */
+export function lineNameOf(region: Pick<RegionConfig, 'lineNames'>, op: string, line: string): string | undefined {
+  return region.lineNames[op]?.[line];
+}
 
 export function isInsideBounds(p: LatLng, b: RegionConfig['bounds']): boolean {
   return p.lat >= b.south && p.lat <= b.north && p.lng >= b.west && p.lng <= b.east;
