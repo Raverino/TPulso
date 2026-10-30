@@ -10,7 +10,7 @@ cached 5 s). TPulso now shows those buses at their GPS position. Everything else
 |---|---|---|
 | Carris Metropolitana bus positions | GPS (open API), refreshed every 10 s | **Live** (green pulsing dot, solid outline); **Stale** after 2 min (faded, "last seen X ago"); not shown after 10 min |
 | All times (departures, next stops, end of line) | timetable | **Scheduled** "~3 min" |
-| Other buses (Carris city, TCB, MobiCascais: no open GPS) | — | **not on the map** (owner decision 2026-10-30); their departures stay in the lists as Scheduled |
+| Other buses (Carris city, TCB, MobiCascais: no open GPS) | timetable | **Expected** (dashed outline) |
 | Trams, Metro, trains, ferries | timetable | **Expected** (dashed outline) |
 
 The always-visible note reads **"Timetable times · live GPS buses"** while live buses work, and
@@ -40,12 +40,20 @@ matched the TML regional `trips.txt` exactly** (two checks, both 100 %).
 A bus whose trip_id is not in the index, or whose route is not in the loaded map areas, is not shown (nothing is
 guessed).
 
-## Only GPS buses on the map (owner decision, 2026-10-30)
+## Which buses are on the map (owner decision, 2026-10-30)
 
-With live buses on, **no bus is drawn at a timetable position**: Carris Metropolitana buses show at their GPS
-position, and buses of operators without open GPS (Carris city, TCB, MobiCascais) are not on the map. Their
-departures stay in the lists. If the feed fails for a minute, the top bar says "live buses unavailable" (bus
-positions are then missing, never guessed). Trams, Metro, trains and ferries keep their Expected positions.
+Every bus is on the map; the source shows by its look, not by a colour (four mode colours only, CLAUDE.md):
+- Carris Metropolitana: at its GPS position (Live: solid outline, green pulsing dot).
+- Carris city, TCB, MobiCascais (no open GPS): at their timetable position (Expected: dashed outline).
+
+(For a few hours on 2026-10-30 the map showed only GPS buses; the owner chose to bring the others back as Expected.)
+
+While the feed answers (or failed less than a minute ago), a Carris Metropolitana trip **without** a GPS bus is
+not drawn at a guessed place next to the real ones. If the feed fails for a minute, the top bar says "live buses
+unavailable" and those trips show their Expected positions again. Departure rows always show the timetable.
+
+Carris (city company, agency IA9T6, owned by the Lisbon city council) and Carris Metropolitana (TML's regional
+brand, agencies LA77N/BNA17/YA15B/A2L1N, run by four private operators) are different companies despite the name.
 
 ## Server
 

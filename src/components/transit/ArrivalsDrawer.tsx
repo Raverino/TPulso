@@ -724,9 +724,10 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
             Carris Metropolitana publishes the GPS position of its buses as open data. TPulso links each bus to its own trip in the timetable
             (by the official trip number), so tapping it shows its line, destination and next stops. Their times are still the timetable: a bus can be
             seen running late while its times still show the plan. A live bus is drawn on its route line, at the point nearest to its GPS position,
-            and moves along the line between updates. The map shows only buses with a GPS position: Carris city buses, TCB and MobiCascais publish
-            none, so they are not on the map, but their departures are in the lists. Trams, Metro, trains and ferries have no open live data: they
-            are shown at their timetable positions. If the live data stops, the top bar says “live buses unavailable”.
+            and moves along the line between updates. Carris city buses, TCB and MobiCascais publish no GPS: they are shown at their timetable
+            positions (dashed outline), like trams, Metro, trains and ferries. Carris (the city company) and Carris Metropolitana are different
+            companies despite the name. While the live data works, a Carris Metropolitana trip without a GPS position is not drawn; if the live
+            data stops, the top bar says “live buses unavailable” and those buses show their timetable positions again.
             {info.liveBuses ? "" : " Live buses are not available right now."}
           </p>
         </HelpSection>

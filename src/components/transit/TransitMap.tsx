@@ -549,7 +549,7 @@ function VehicleAnimator({
   operatorName,
   alertPatterns,
   live,
-  hiddenModes,
+  hiddenOps,
 }: {
   trips: readonly ActiveTrip[];
   clock: () => number;
@@ -564,12 +564,12 @@ function VehicleAnimator({
   alertPatterns: ReadonlySet<number>;
   /** Live GPS buses linked to their timetable trips (same keys), drawn at their GPS position (docs/LIVE.md). */
   live: readonly ExpectedVehicle[];
-  /** Modes whose timetable positions are not drawn (buses, while live GPS buses are on: only real buses show). */
-  hiddenModes: ReadonlySet<TransportMode>;
+  /** Operators whose buses come from the live feed while it works: their timetable positions are not drawn. */
+  hiddenOps: ReadonlySet<string>;
 }) {
   const map = useMap();
-  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, hiddenModes });
-  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, hiddenModes };
+  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, hiddenOps });
+  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, hiddenOps };
 
   useEffect(() => {
     const markers = new Map<string, L.Marker>();
@@ -620,7 +620,7 @@ function VehicleAnimator({
       const dt = Math.min(100, ts - prevTs);
       prevTs = ts;
       if (document.hidden) return;
-      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride, headingUp: hu, live: liveList, hiddenModes: hm } = state.current;
+      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride, headingUp: hu, live: liveList, hiddenOps: ho } = state.current;
       // Vehicles move a few metres per second: 20 updates a second look the same as 60 and cost a third.
       // A ride's camera follows its vehicle every frame.
       if (!ride && ts - lastTs < 50) return;
@@ -635,7 +635,7 @@ function VehicleAnimator({
       const liveKeys = new Set(liveList.map((v) => v.key));
       const near = list.filter((at) => {
         if (at.key === ride) return true;
-        if (liveKeys.has(at.key) || hm.has(at.p.mode)) return false;
+        if (liveKeys.has(at.key) || ho.has(at.p.op)) return false;
         if (f.keys) return f.keys.has(at.key);
         if (f.mode !== "all" && f.mode !== at.p.mode) return false;
         const b = patternBox(at.p);
@@ -964,13 +964,13 @@ interface Props {
   alertPatterns?: ReadonlySet<number>;
   /** TPulso: live GPS buses linked to their timetable trips (docs/LIVE.md). */
   liveVehicles?: readonly ExpectedVehicle[];
-  /** TPulso: modes whose timetable positions are not drawn (buses, while live GPS buses are on). */
-  hiddenModes?: ReadonlySet<TransportMode>;
+  /** TPulso: operators whose timetable positions are replaced by the live feed while it works. */
+  hiddenOps?: ReadonlySet<string>;
 }
 
 const NO_PATTERNS: ReadonlySet<number> = new Set();
 const NO_LIVE: readonly ExpectedVehicle[] = [];
-const NO_MODES: ReadonlySet<TransportMode> = new Set();
+const NO_OPS: ReadonlySet<string> = new Set();
 
 function ClearOnMapClick({ onClear }: { onClear: () => void }) {
   const map = useMap();
@@ -1397,7 +1397,7 @@ export default memo(function TransitMap({
   baseLines,
   alertPatterns,
   liveVehicles,
-  hiddenModes,
+  hiddenOps,
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1574,7 +1574,7 @@ export default memo(function TransitMap({
         operatorName={operatorName}
         alertPatterns={alertPatterns ?? NO_PATTERNS}
         live={liveVehicles ?? NO_LIVE}
-        hiddenModes={hiddenModes ?? NO_MODES}
+        hiddenOps={hiddenOps ?? NO_OPS}
       />
       <SonarGeometry radius={radius} disc={discRef} root={rootRef} />
     </MapContainer>

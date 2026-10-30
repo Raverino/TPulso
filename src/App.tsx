@@ -60,11 +60,8 @@ const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | 
   stopKindLabel([...new Set(members.flatMap((m) => m.dir?.modes ?? ["bus" as const]))]);
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
-/** No operator with live buses (feed off, or no live index in this timetable). */
+/** No operator with live buses (feed off or failing, or no live index in this timetable). */
 const NO_OPS: ReadonlySet<string> = new Set();
-/** Modes whose timetable (Expected) positions are not drawn: buses, while live GPS buses are on. */
-const NO_MODES: ReadonlySet<TransportMode> = new Set();
-const BUS_ONLY: ReadonlySet<TransportMode> = new Set<TransportMode>(["bus"]);
 
 // TPulso: Ferry added; modes without timetable data stay visible but disabled ("no data yet").
 const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
@@ -287,20 +284,21 @@ export default function App() {
     return out;
   }, [manifest, liveFeed.buses, liveIdx, tt.areas, scheduled]);
   const liveList = useMemo(() => [...liveLinked.values()], [liveLinked]);
-  // Owner decision (2026-10-30): with live buses on, the map shows only buses with a GPS position. No bus is drawn at a
-  // timetable position (Carris city, TCB and MobiCascais publish no GPS); their departures stay in the lists as
-  // Scheduled times. Trams, Metro, trains and ferries keep their Expected positions.
+  // Owner decision (2026-10-30, revised): every bus is on the map. Carris Metropolitana buses at their GPS position
+  // (Live); buses of operators without open GPS (Carris city, TCB, MobiCascais) at their timetable position (Expected,
+  // dashed). While the feed answers (or failed less than a minute ago), a Carris Metropolitana trip without a GPS bus
+  // is not drawn at a guessed place next to the real ones; if the feed stops, its Expected position returns.
   const liveOn = liveOps.size > 0 && liveFeed.status !== "off";
-  const hiddenModes = useMemo(() => (liveOn ? BUS_ONLY : NO_MODES), [liveOn]);
   const liveFresh = liveFeed.receivedAt !== null && Date.now() - liveFeed.receivedAt < 60_000;
+  const hiddenOps = useMemo(() => (liveFresh ? liveOps : NO_OPS), [liveFresh, liveOps]);
   const liveActive = liveFresh && liveOps.size > 0;
-  // Live is on but nothing came in for a minute: say so (bus positions are then simply missing, never guessed).
+  // Live is on but nothing came in for a minute: say so (those buses then show their timetable positions again).
   const liveDown = liveOn && !liveFresh && liveFeed.status === "error";
   const expected = useMemo(() => {
-    if (!liveLinked.size && !hiddenModes.size) return scheduled;
-    const kept = scheduled.filter((v) => !liveLinked.has(v.key) && (v.key === ride?.key || !hiddenModes.has(v.mode)));
+    if (!liveLinked.size && !hiddenOps.size) return scheduled;
+    const kept = scheduled.filter((v) => !liveLinked.has(v.key) && (v.key === ride?.key || !hiddenOps.has(v.op)));
     return [...kept, ...liveList];
-  }, [scheduled, liveLinked, liveList, hiddenModes, ride?.key]);
+  }, [scheduled, liveLinked, liveList, hiddenOps, ride?.key]);
   const toVehicle = useCallback(
     (v: ExpectedVehicle): Vehicle => ({
       id: v.key,
@@ -751,9 +749,9 @@ export default function App() {
     const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
     // A trip with a live bus shows the bus; the live operator's other trips are not placed by the timetable.
     const coming = expectedVehicles(manifest, [pseudo], now)
-      .filter((v) => stopTripKeys.has(v.key) && !liveLinked.has(v.key) && !hiddenModes.has(v.mode));
+      .filter((v) => stopTripKeys.has(v.key) && !liveLinked.has(v.key) && !hiddenOps.has(v.op));
     return [...coming, ...liveList.filter((v) => stopTripKeys.has(v.key))].map(toVehicle);
-  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle, liveLinked, liveList, hiddenModes]);
+  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle, liveLinked, liveList, hiddenOps]);
   // The animation loop's trips: those of the loaded areas, plus (while a stop is open) the full routes coming to it.
   const mapTrips = useMemo(() => {
     if (!stopTripKeys || !manifest || expired) return trips;
@@ -1190,7 +1188,7 @@ export default function App() {
                 baseLines={baseLines}
                 alertPatterns={alertPatterns}
                 liveVehicles={liveList}
-                hiddenModes={hiddenModes}
+                hiddenOps={hiddenOps}
                 onSelect={onMapSelect}
               />
             ) : (
