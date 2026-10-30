@@ -259,8 +259,10 @@ export default function ArrivalsDrawer({
   onSheet,
 }: Props) {
   // Tapping a departure just reveals its stop and clock time (no path view).
-  const [showVeh, setShowVeh] = useState(true);
-  const [showDep, setShowDep] = useState(true);
+  // TPulso: both lists start closed (feedback: too much on screen at once); each header stays at the top while its
+  // list is scrolled, so it can be closed again at any point.
+  const [showVeh, setShowVeh] = useState(false);
+  const [showDep, setShowDep] = useState(false);
   const tap = (a: Arrival) => onOpen?.(openId === a.id ? null : a.id);
   // Keep showing the last vehicle while the card flips back.
   const last = useRef<{
@@ -371,7 +373,7 @@ export default function ArrivalsDrawer({
 
           <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain p-2 [-webkit-overflow-scrolling:touch]">
             {(
-              <section className="mb-3">
+              <section className="mb-1">
                 <Toggle label={`Vehicles on the radar now · ${radarVehicles.length}`} open={showVeh} onChange={setShowVeh} />
                 {showVeh && radarVehicles.length === 0 && (
                   <p className="px-2 pb-2 text-[11px] text-muted-foreground">No vehicles inside the circle right now.</p>
@@ -690,39 +692,57 @@ function PanelHeader({ title, icon: Icon, onClose }: { title: string; icon: type
 
 function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info: HelpInfo }) {
   const fmt = (d: string) => `${d.slice(6, 8)}/${d.slice(4, 6)}/${d.slice(0, 4)}`;
+  // TPulso: most needed first (what you see on the map, then the times), reference last (timetable versions).
   return (
     <div className="flex h-full flex-col" onDoubleClick={onClose}>
       <PanelHeader title="How TPulso works" icon={CircleHelp} onClose={onClose} />
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 py-4 text-xs leading-relaxed [-webkit-overflow-scrolling:touch]">
         <p className="font-display text-sm font-bold text-primary">{info.liveBuses ? "Timetable times, live GPS buses" : "Timetable data, not live"}</p>
         <p className="text-foreground/85">
-          TPulso shows the public transport timetable around you: stops inside your chosen circle, what leaves them in the next ten minutes, and
-          where each vehicle should be according to the timetable.{" "}
+          TPulso shows public transport around you: the stops inside your circle, what leaves them in the next ten minutes, and the vehicles
+          nearby.{" "}
           {info.liveBuses
-            ? "All times are from the timetable. Only the positions of Carris Metropolitana buses are live, from their GPS."
+            ? "All times are from the timetable. Carris Metropolitana buses are shown where their GPS says they are."
             : "Nothing on screen is live."}
         </p>
 
-        <HelpSection title="Symbols">
+        <HelpSection title="Vehicles on the map">
+          <HelpRow icon={<SourceDot state="live" />} title="Live" text="A Carris Metropolitana bus at its GPS position (solid outline, pulsing green dot)." />
+          <HelpRow icon={<SourceDot state="expected" />} title="Expected" text="Where a vehicle should be according to the timetable (dashed outline). It can be early, late or cancelled." />
+          <HelpRow icon={<SourceDot state="stale" />} title="Stale" text="Its last GPS position is over 2 minutes old: faded, “last seen … ago”. After 10 minutes it is hidden." />
+          <p className="text-muted-foreground">Stations show a ring in the colours of the transport that stops there. Tap a vehicle for its route and stops, or a station for its departures.</p>
+        </HelpSection>
+
+        {/* TPulso: the display rule for times (CLAUDE.md) */}
+        <HelpSection title="Times">
+          <HelpRow icon={<SourceDot state="scheduled" />} title="Scheduled" text="A time from the timetable — “~3 min”. Delays are not known." />
+          <HelpRow icon={<MapPin className="size-4" />} title="Countdown marker" text="The stop and time remaining for an opened departure" />
+        </HelpSection>
+
+        <HelpSection title="Colours and lines">
           <HelpRow icon={<Bus className="size-4" />} title="Yellow" text="Bus" tone="bg-bus" />
           <HelpRow icon={<TramFront className="size-4" />} title="Purple" text="Tram or metro" tone="bg-tram" />
-          <p className="text-muted-foreground">
-            Metro lines are shown by their codes, with “MET” on the map: <strong>Az</strong> Linha Azul, <strong>Am</strong> Linha Amarela,{" "}
-            <strong>Vd</strong> Linha Verde, <strong>Vm</strong> Linha Vermelha. Trams (Carris) have numbers ending in E, like 28E.
-          </p>
           <HelpRow icon={<TrainFront className="size-4" />} title="Blue" text="Train (CP, Fertagus)" tone="bg-train" />
           <HelpRow icon={<Ship className="size-4" />} title="Red" text="Ferry" tone="bg-ferry" />
-          <p className="text-muted-foreground">Each kind of transport always has the same colour and its own symbol. Stations show a ring in the colours of the transport that stops there.</p>
-          <HelpRow icon={<MapPin className="size-4" />} title="Countdown marker" text="The stop and time remaining for an opened departure" />
+          <p className="text-muted-foreground">
+            Metro lines show their code, with “MET” on the map: <strong>Az</strong> Linha Azul, <strong>Am</strong> Linha Amarela,{" "}
+            <strong>Vd</strong> Linha Verde, <strong>Vm</strong> Linha Vermelha. Trams (Carris) have numbers ending in E, like 28E.
+          </p>
+        </HelpSection>
+
+        <HelpSection title="Using the radar">
+          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag or pinch the map to look around: the circle stays in the middle of the screen and shows what is under it ("Exploring here"). Tap Recenter to go back; one second after you stop touching the map it goes back by itself, unless a vehicle or stop is selected. Tap a departure to show its stop. Tap the map to return to the results.</p>
           <HelpRow icon={<Pin className="size-4" />} title="Pin" text="Keep following a connection on the board" />
         </HelpSection>
 
-        {/* TPulso offline: the two timetable states (CLAUDE.md display rule) */}
-        <HelpSection title="What the times and vehicles mean">
-          <HelpRow icon={<SourceDot state="scheduled" />} title="Scheduled" text="A time from the timetable — “~3 min”" />
-          <HelpRow icon={<SourceDot state="expected" />} title="Expected" text="Where a vehicle should be now according to the timetable (dashed outline). Real vehicles can be early, late or cancelled." />
-          <HelpRow icon={<SourceDot state="live" />} title="Live" text="A Carris Metropolitana bus where its GPS says it is now (solid outline, pulsing green dot)." />
-          <HelpRow icon={<SourceDot state="stale" />} title="Stale" text="Its last GPS position is more than 2 minutes old: shown faded, with “last seen … ago”. After 10 minutes it is no longer shown." />
+        <HelpSection title="Service alerts">
+          <p>
+            When an operator publishes a service alert (works, detours, strikes, a station entrance closed…), the departures and vehicles it
+            concerns show <strong className="alert-text">⚠ Line alert</strong> or <strong className="alert-text">⚠ Stop alert</strong>, and the
+            top bar shows how many alerts concern your radar. Tap either to read them. Alerts come from TML (all operators) and from
+            Transtejo/Soflusa's notices, in Portuguese as published, and need a connection. The times shown are still the timetable: they do not
+            include these changes.
+          </p>
         </HelpSection>
 
         <HelpSection title="Live GPS buses">
@@ -736,35 +756,6 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
             data stops, the top bar says “live buses unavailable” and those buses show their timetable positions again.
             {info.liveBuses ? "" : " Live buses are not available right now."}
           </p>
-        </HelpSection>
-
-        <HelpSection title="Service alerts">
-          <p>
-            When an operator publishes a service alert (works, detours, strikes, a station entrance closed…), the departures and vehicles it
-            concerns show <strong className="alert-text">⚠ Line alert</strong> or <strong className="alert-text">⚠ Stop alert</strong>, and the
-            top bar shows how many alerts concern your radar. Tap either to read them. Alerts come from TML (all operators) and from
-            Transtejo/Soflusa's notices, in Portuguese as published, and need a connection. The times shown are still the timetable: they do not
-            include these changes.
-          </p>
-        </HelpSection>
-
-        <HelpSection title="Timetables in this version">
-          <p>Valid {info.window}. Source: TML regional GTFS feed.</p>
-          <ul className="space-y-1">
-            {info.operators.map((o) => (
-              <li key={o.id}>
-                <strong>{o.name}</strong> · {fmt(o.dateFrom)}–{fmt(o.dateTo)}
-                {o.crossCheck.status === "mismatch" && (
-                  <span className="block text-[11px] text-destructive">
-                    Differs from the operator’s own timetable today ({o.tripsToday} vs {o.crossCheck.ownTripsToday} trips). Which one is right is not known yet.
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {info.excluded.length > 0 && (
-            <p className="text-muted-foreground">Not included: {info.excluded.map((e) => `${e.name} (${e.reason})`).join("; ")}.</p>
-          )}
         </HelpSection>
 
         <HelpSection title="Using TPulso offline">
@@ -787,8 +778,23 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
           {info.download.state === "error" && <p className="text-destructive">Could not save everything: {info.download.error}</p>}
         </HelpSection>
 
-        <HelpSection title="Using the radar">
-          <p>Choose 100, 200, 500 or 1000 metres, and filter by bus, tram/metro, train or ferry. Drag or pinch the map to look around: the circle stays in the middle of the screen and shows what is under it ("Exploring here"). Tap Recenter to go back; one second after you stop touching the map it goes back by itself, unless a vehicle or stop is selected. Tap a vehicle for its route and scheduled stops, or a stop for its departures (only the vehicles coming to that stop stay on the map). Tap a departure to show its stop. Tap the map to return to the results.</p>
+        <HelpSection title="Timetables in this version">
+          <p>Valid {info.window}. Source: TML regional GTFS feed.</p>
+          <ul className="space-y-1">
+            {info.operators.map((o) => (
+              <li key={o.id}>
+                <strong>{o.name}</strong> · {fmt(o.dateFrom)}–{fmt(o.dateTo)}
+                {o.crossCheck.status === "mismatch" && (
+                  <span className="block text-[11px] text-destructive">
+                    Differs from the operator’s own timetable today ({o.tripsToday} vs {o.crossCheck.ownTripsToday} trips). Which one is right is not known yet.
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {info.excluded.length > 0 && (
+            <p className="text-muted-foreground">Not included: {info.excluded.map((e) => `${e.name} (${e.reason})`).join("; ")}.</p>
+          )}
         </HelpSection>
 
         <button onClick={onClose} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2.5 font-display text-xs font-bold text-primary-foreground">
@@ -1397,9 +1403,10 @@ function FollowCard({
   );
 }
 
+/** A list section's header: tap to open or close it. Sticky, so it stays reachable while its list scrolls. */
 function Toggle({ label, open, onChange }: { label: string; open: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex cursor-pointer select-none items-center gap-1.5 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+    <label className="sticky -top-2 z-10 -mx-2 flex cursor-pointer select-none items-center gap-1.5 bg-surface px-4 py-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
       <input
         type="checkbox"
         checked={open}

@@ -981,7 +981,12 @@ export default function App() {
 
   // Phones: only the vehicle panel (its list of stops further along the line) can be raised over the map.
   const vehicleView = !!selected && panelView === "results";
-  const vehiclePanelUp = sheetUp && vehicleView;
+  // Phones: Help slides up over the whole map (the reader is reading, not looking at the map); back closes it.
+  const helpFull = narrow && panelView === "help";
+  const vehiclePanelUp = (sheetUp && vehicleView) || helpFull;
+  useLayoutEffect(() => {
+    if (helpFull) setRaiseBy((mapSlotRef.current?.offsetHeight ?? 0) + (legendRef.current?.offsetHeight ?? 0));
+  }, [helpFull]);
 
   // Where the radar is. Phones show only this (plus a timetable problem, if any); wide screens add the timetable
   // window and the vehicle count.
