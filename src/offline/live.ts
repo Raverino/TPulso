@@ -8,7 +8,7 @@
 
 import { addDays, decodePolyline, serviceDayStartMs, type Manifest, type PatternData } from '../../shared/timetable';
 import type { Vehicle as LiveBus } from '../../shared/types';
-import type { ExpectedVehicle } from './engine';
+import { pointAlong, type ExpectedVehicle } from './engine';
 
 export type { LiveBus };
 
@@ -157,6 +157,9 @@ export function liveVehicle(
       segment = { from: slice.first + i, to: next, f: (pr.along - d[i]!) / (d[i + 1]! - d[i]! || 1) };
     }
   }
+  // On the route: the point of the line nearest to the GPS fix (a bus drives on its line; GPS wanders a few metres).
+  const along = pr && pr.offM <= OFF_ROUTE_M ? pr.along : null;
+  const on = along !== null ? pointAlong(slice, along) : null;
   return {
     key: link.key,
     patternId: slice.id,
@@ -168,14 +171,62 @@ export function liveVehicle(
     mode: slice.mode,
     op: slice.op,
     headsign: slice.headsign,
-    lat: bus.lat,
-    lng: bus.lng,
-    bearing: bus.bearing ?? expected?.bearing ?? 0,
+    lat: on ? on.lat : bus.lat,
+    lng: on ? on.lng : bus.lng,
+    bearing: on ? on.bearing : (bus.bearing ?? expected?.bearing ?? 0),
     atStop,
     nextStopIndex: next,
     segment,
-    live: { state, fixAt: bus.timestamp, busId: bus.id },
+    live: { state, fixAt: bus.timestamp, busId: bus.id, slice, along },
   };
+}
+
+/**
+ * How a live bus moves on screen between GPS fixes: along its route line, never through buildings and never in
+ * jumps. From where it is drawn, it travels to the newest fix's point on the line at a steady pace, over as long as
+ * the bus itself took between its last two fixes (3–30 s), so it moves continuously at about its real speed and
+ * reaches each fix as the next one is due. GPS noise that would move it a little backwards is ignored (a bus does
+ * not reverse); a large step back (a new trip, or a wrong earlier point) is taken at once.
+ */
+export interface Track {
+  slice: PatternData;
+  from: number;
+  to: number;
+  t0: number;
+  dur: number;
+  fixAt: number;
+}
+
+export const TRACK_MIN_MS = 3_000;
+export const TRACK_MAX_MS = 30_000;
+/** Backwards by more than this is a real change (taken at once), less is GPS noise (held). */
+export const TRACK_JUMP_BACK_M = 150;
+
+/** Metres along the track's slice where the bus is drawn at `ts`. */
+export function trackAlong(t: Track, ts: number): number {
+  if (t.dur <= 0) return t.to;
+  const s = Math.min(1, Math.max(0, (ts - t.t0) / t.dur));
+  return t.from + (t.to - t.from) * s;
+}
+
+/** The track after a (possibly unchanged) fix at `along` metres on `slice`, at screen time `ts`. */
+export function trackUpdate(t: Track | undefined, slice: PatternData, along: number, fixAt: number, ts: number): Track {
+  if (!t) return { slice, from: along, to: along, t0: ts, dur: 0, fixAt };
+  // Same fix: nothing new (near an area edge the bus may be matched to the neighbouring slice; switch only with a fix).
+  if (t.fixAt === fixAt) return t;
+  let from = trackAlong(t, ts);
+  if (t.slice !== slice) {
+    // The bus moved into another area's slice of the same route: carry on from where it is drawn.
+    const here = pointAlong(t.slice, from);
+    from = projectOnPattern(slice, here.lat, here.lng)?.along ?? along;
+  }
+  let to = along;
+  if (to < from) {
+    if (from - to > TRACK_JUMP_BACK_M) from = to;
+    else to = from;
+  }
+  const dur = Math.min(TRACK_MAX_MS, Math.max(TRACK_MIN_MS, fixAt - t.fixAt));
+  return { slice, from, to, t0: ts, dur, fixAt };
 }
 
 /**

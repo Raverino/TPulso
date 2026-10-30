@@ -114,7 +114,14 @@ export interface ExpectedVehicle {
    * Set when the position is a live GPS fix of this trip's bus (src/offline/live.ts), not calculated from the
    * timetable: its state (Live / Stale), the time of the fix and the operator's vehicle id (internal, never shown).
    */
-  live?: { state: 'live' | 'stale'; fixAt: number; busId: string };
+  live?: {
+    state: 'live' | 'stale';
+    fixAt: number;
+    busId: string;
+    /** The pattern slice the bus runs on, and metres along it of its GPS fix (null = too far off the line). */
+    slice: PatternData;
+    along: number | null;
+  };
 }
 
 interface Geo { pts: [number, number][]; cum: number[]; box: [number, number, number, number] }

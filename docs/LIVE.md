@@ -10,7 +10,8 @@ cached 5 s). TPulso now shows those buses at their GPS position. Everything else
 |---|---|---|
 | Carris Metropolitana bus positions | GPS (open API), refreshed every 10 s | **Live** (green pulsing dot, solid outline); **Stale** after 2 min (faded, "last seen X ago"); not shown after 10 min |
 | All times (departures, next stops, end of line) | timetable | **Scheduled** "~3 min" |
-| Every other vehicle (Carris, Metro, CP, Fertagus, ferries, TCB, MobiCascais) | timetable | **Expected** (dashed outline) |
+| Other buses (Carris city, TCB, MobiCascais: no open GPS) | — | **not on the map** (owner decision 2026-10-30); their departures stay in the lists as Scheduled |
+| Trams, Metro, trains, ferries | timetable | **Expected** (dashed outline) |
 
 The always-visible note reads **"Timetable times · live GPS buses"** while live buses work, and
 "Timetable data, not live" otherwise. Help explains both.
@@ -29,17 +30,22 @@ matched the TML regional `trips.txt` exactly** (two checks, both 100 %).
   today's (or, after midnight, yesterday's) service day. The bus then **takes over that trip's key**, so tapping it
   opens the same panel as before (line, destination, next stop, end of line, route line), and its departures are
   the same rows.
-- Where it is on its route (for the next stop) comes from projecting the GPS point onto the trip's shape; the
-  position drawn is the GPS point itself (live pins are never moved to avoid overlaps).
+- Where it is on its route comes from projecting the GPS point onto the trip's shape. The bus is **drawn on its
+  line** at that point (GPS wanders a few metres) and, between fixes, **moves along the line** from where it is
+  drawn to the newest fix, over as long as the bus took between its last two fixes (3–30 s), so it moves steadily
+  at about its real pace (`trackUpdate` in `src/offline/live.ts`). A small step back (GPS noise, < 150 m) is held; a
+  larger one is taken at once. A fix more than 150 m off the line is drawn where the GPS says. Live pins are never
+  moved to avoid overlaps.
 
 A bus whose trip_id is not in the index, or whose route is not in the loaded map areas, is not shown (nothing is
 guessed).
 
-## While the feed works
+## Only GPS buses on the map (owner decision, 2026-10-30)
 
-Carris Metropolitana trips **without** a GPS bus are not drawn at a timetable position (they would be guesses next
-to real buses). If the feed fails for more than a minute, their Expected positions come back automatically.
-Departure rows always show the timetable.
+With live buses on, **no bus is drawn at a timetable position**: Carris Metropolitana buses show at their GPS
+position, and buses of operators without open GPS (Carris city, TCB, MobiCascais) are not on the map. Their
+departures stay in the lists. If the feed fails for a minute, the top bar says "live buses unavailable" (bus
+positions are then missing, never guessed). Trams, Metro, trains and ferries keep their Expected positions.
 
 ## Server
 

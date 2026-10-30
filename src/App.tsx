@@ -60,8 +60,11 @@ const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | 
   stopKindLabel([...new Set(members.flatMap((m) => m.dir?.modes ?? ["bus" as const]))]);
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
-/** No operator replaced by the live feed (feed off, failing, or not in this timetable). */
+/** No operator with live buses (feed off, or no live index in this timetable). */
 const NO_OPS: ReadonlySet<string> = new Set();
+/** Modes whose timetable (Expected) positions are not drawn: buses, while live GPS buses are on. */
+const NO_MODES: ReadonlySet<TransportMode> = new Set();
+const BUS_ONLY: ReadonlySet<TransportMode> = new Set<TransportMode>(["bus"]);
 
 // TPulso: Ferry added; modes without timetable data stay visible but disabled ("no data yet").
 const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
@@ -284,16 +287,20 @@ export default function App() {
     return out;
   }, [manifest, liveFeed.buses, liveIdx, tt.areas, scheduled]);
   const liveList = useMemo(() => [...liveLinked.values()], [liveLinked]);
-  // While the feed answers (or failed less than a minute ago), its operators' timetable positions are not shown:
-  // a bus without a GPS fix is then not drawn at a guessed place. If the feed stops, Expected positions return.
+  // Owner decision (2026-10-30): with live buses on, the map shows only buses with a GPS position. No bus is drawn at a
+  // timetable position (Carris city, TCB and MobiCascais publish no GPS); their departures stay in the lists as
+  // Scheduled times. Trams, Metro, trains and ferries keep their Expected positions.
+  const liveOn = liveOps.size > 0 && liveFeed.status !== "off";
+  const hiddenModes = useMemo(() => (liveOn ? BUS_ONLY : NO_MODES), [liveOn]);
   const liveFresh = liveFeed.receivedAt !== null && Date.now() - liveFeed.receivedAt < 60_000;
-  const replacedOps = useMemo(() => (liveFresh ? liveOps : NO_OPS), [liveFresh, liveOps]);
   const liveActive = liveFresh && liveOps.size > 0;
+  // Live is on but nothing came in for a minute: say so (bus positions are then simply missing, never guessed).
+  const liveDown = liveOn && !liveFresh && liveFeed.status === "error";
   const expected = useMemo(() => {
-    if (!liveLinked.size && !replacedOps.size) return scheduled;
-    const kept = scheduled.filter((v) => !liveLinked.has(v.key) && (v.key === ride?.key || !replacedOps.has(v.op)));
+    if (!liveLinked.size && !hiddenModes.size) return scheduled;
+    const kept = scheduled.filter((v) => !liveLinked.has(v.key) && (v.key === ride?.key || !hiddenModes.has(v.mode)));
     return [...kept, ...liveList];
-  }, [scheduled, liveLinked, liveList, replacedOps, ride?.key]);
+  }, [scheduled, liveLinked, liveList, hiddenModes, ride?.key]);
   const toVehicle = useCallback(
     (v: ExpectedVehicle): Vehicle => ({
       id: v.key,
@@ -744,9 +751,9 @@ export default function App() {
     const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
     // A trip with a live bus shows the bus; the live operator's other trips are not placed by the timetable.
     const coming = expectedVehicles(manifest, [pseudo], now)
-      .filter((v) => stopTripKeys.has(v.key) && !liveLinked.has(v.key) && !replacedOps.has(v.op));
+      .filter((v) => stopTripKeys.has(v.key) && !liveLinked.has(v.key) && !hiddenModes.has(v.mode));
     return [...coming, ...liveList.filter((v) => stopTripKeys.has(v.key))].map(toVehicle);
-  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle, liveLinked, liveList, replacedOps]);
+  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle, liveLinked, liveList, hiddenModes]);
   // The animation loop's trips: those of the loaded areas, plus (while a stop is open) the full routes coming to it.
   const mapTrips = useMemo(() => {
     if (!stopTripKeys || !manifest || expired) return trips;
@@ -989,6 +996,7 @@ export default function App() {
   ) : tt.error ? (
     <span className="font-bold text-destructive"> · timetable unavailable</span>
   ) : null;
+  const liveProblem = liveDown ? <span className="font-bold text-destructive"> · live buses unavailable</span> : null;
   const statusLine = (
     <>
       {place}
@@ -1004,7 +1012,8 @@ export default function App() {
       ) : (
         "loading timetable…"
       )}
-      {` · ${inRange} expected vehicles in the area`}
+      {` · ${inRange} vehicles in the area`}
+      {liveProblem}
       {tt.loading && manifest ? " · loading map areas…" : ""}
     </>
   );
@@ -1074,6 +1083,7 @@ export default function App() {
           <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">{sourceNote}</span>
           {place}
           {timetableProblem}
+          {liveProblem}
         </p>
         <div className="flex w-full items-center justify-between gap-1 md:contents">
         <div className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
@@ -1180,7 +1190,7 @@ export default function App() {
                 baseLines={baseLines}
                 alertPatterns={alertPatterns}
                 liveVehicles={liveList}
-                liveOps={replacedOps}
+                hiddenModes={hiddenModes}
                 onSelect={onMapSelect}
               />
             ) : (
