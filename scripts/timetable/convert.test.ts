@@ -9,6 +9,7 @@ import {
   areasAround,
   decodePolyline,
   encodePolyline,
+  liveTripFile,
   modeOfRouteType,
   serviceDayStartMs,
 } from '../../shared/timetable.ts';
@@ -83,6 +84,29 @@ describe('patterns and trips', () => {
     const area = [...res.areas.values()].flatMap(a => a.patterns).find(p => p.line === '3715')!;
     expect(area.lineId).toBe('[YA15B]3715'); // area slices carry it too
     expect(res.operators.find(o => o.id === 'cm')!.agencies).toEqual(['LA77N', 'BNA17', 'YA15B', 'A2L1N']);
+  });
+  it('indexes Carris Metropolitana trip_ids per line (live GPS link), and no other operator', async () => {
+    const res = await resP;
+    expect([...res.liveTrips.keys()]).toEqual(['[YA15B]3715']);
+    const idx = res.liveTrips.get('[YA15B]3715')!;
+    const p = [...res.routes.values()].find(r => r.line === '3715')!;
+    // The trip ids are the feed's own (the live API reports the same ones); start = first departure.
+    expect(idx['[PL3CL][YA15B]3715_0_1_0830_0859_0_ESC_DOM']).toEqual([p.id, 8 * 3600 + 45 * 60]);
+    expect(idx['[PL3CL][YA15B]3715_0_1_0930_0959_0_ESC_DOM']).toEqual([p.id, 9 * 3600 + 45 * 60]);
+  });
+  it('points an exact duplicate trip_id at the row it was merged into', async () => {
+    const twice: typeof src = async function* (file) {
+      for await (const r of src(file)) yield r;
+      if (file === 'trips.txt' || file === 'stop_times.txt') for await (const r of src(file)) yield { ...r, trip_id: `[PLAN2]${r.trip_id}` };
+    };
+    const res = await convert(twice, { today: TODAY, days: 14, operators: OPERATORS, version: 't' });
+    const idx = res.liveTrips.get('[YA15B]3715')!;
+    expect(Object.keys(idx)).toHaveLength(4);
+    expect(idx['[PLAN2][PL3CL][YA15B]3715_0_1_0830_0859_0_ESC_DOM']).toEqual(idx['[PL3CL][YA15B]3715_0_1_0830_0859_0_ESC_DOM']);
+  });
+  it('makes a safe file name from a line id', () => {
+    expect(liveTripFile('[LA77N]1624')).toBe('LA77N-1624');
+    expect(liveTripFile('[YA15B]3715')).toBe('YA15B-3715');
   });
   it('maps route types to filter modes', () => {
     expect([0, 1, 2, 3, 4, 109, 1200].map(modeOfRouteType)).toEqual(['tram', 'tram', 'train', 'bus', 'ferry', 'train', 'ferry']);

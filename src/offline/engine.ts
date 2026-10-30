@@ -110,6 +110,11 @@ export interface ExpectedVehicle {
   nextStopIndex: number;
   /** Between full-pattern stops `from` and `to`, fraction `f` of the way (by time). from === to when waiting at a stop. */
   segment: { from: number; to: number; f: number };
+  /**
+   * Set when the position is a live GPS fix of this trip's bus (src/offline/live.ts), not calculated from the
+   * timetable: its state (Live / Stale), the time of the fix and the operator's vehicle id (internal, never shown).
+   */
+  live?: { state: 'live' | 'stale'; fixAt: number; busId: string };
 }
 
 interface Geo { pts: [number, number][]; cum: number[]; box: [number, number, number, number] }

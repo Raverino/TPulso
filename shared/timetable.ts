@@ -60,6 +60,25 @@ export interface Manifest {
   areas: Record<string, number>;
   /** Region-wide line shapes for tram, metro, train and ferry (lines.json), compressed size. */
   lines: { file: string; bytes: number };
+  /**
+   * Trip_id indexes for operators whose live GPS vehicles report the GTFS trip_id (live/<liveTripFile(line)>.json):
+   * the line ids that have one. Absent in timetables built before 2026-10-30.
+   */
+  liveTrips?: { dir: string; lines: string[] };
+}
+
+/** live/<file>.json: GTFS trip_id -> [pattern id, trip start (s of the service day)] for one line. */
+export interface LiveTripsFile {
+  format: 1;
+  version: string;
+  /** Line id (lineIdOfRoute), e.g. "[LA77N]1624". */
+  line: string;
+  trips: Record<string, [number, number]>;
+}
+
+/** File name (without .json) of a line's trip_id index: "[LA77N]1624" -> "LA77N-1624". */
+export function liveTripFile(lineId: string): string {
+  return lineId.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 /** One line shape of a non-bus mode, drawn at every radius (lines.json). */

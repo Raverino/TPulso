@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { dateInZone, type Manifest, type OperatorInfo } from '../shared/timetable.ts';
+import { dateInZone, liveTripFile, type LiveTripsFile, type Manifest, type OperatorInfo } from '../shared/timetable.ts';
 import { convert, countTripsOn } from './timetable/convert.ts';
 import { download, zipSource, type GtfsSource } from './timetable/gtfs.ts';
 import { replaceOperatorFeed } from './timetable/merge.ts';
@@ -119,12 +119,21 @@ async function main() {
   for (const [id, r] of res.routes) files.push({ rel: `routes/${id}.json`, json: JSON.stringify(r) });
   const linesJson = JSON.stringify({ format: 1, version, lines: res.lines });
   files.push({ rel: 'lines.json', json: linesJson });
+  // Trip_id index per line for live GPS vehicles (Carris Metropolitana): links a live bus to its timetable trip.
+  const liveLines: string[] = [];
+  for (const [line, trips] of res.liveTrips) {
+    const file: LiveTripsFile = { format: 1, version, line, trips };
+    files.push({ rel: `live/${liveTripFile(line)}.json`, json: JSON.stringify(file) });
+    liveLines.push(line);
+  }
+  liveLines.sort();
   const manifest: Manifest = {
     format: 1, version, generatedAt: new Date().toISOString(), timezone: 'Europe/Lisbon',
     feed: { url: TML_FEED_URL, version: res.feed.version, publisher: res.feed.publisher },
     window: { first: today, days }, operators, excluded: res.excluded,
     area: { latDeg: 0.02, lngDeg: 0.025 }, areas: areaSizes,
     lines: { file: 'lines.json', bytes: zlib.gzipSync(linesJson).length },
+    ...(liveLines.length ? { liveTrips: { dir: 'live', lines: liveLines } } : {}),
   };
   files.push({ rel: 'manifest.json', json: JSON.stringify(manifest) });
 
@@ -169,7 +178,7 @@ async function main() {
   }
   log('\n  Excluded:');
   for (const e of res.excluded) log(`  - ${e.name}: ${e.reason}`);
-  log(`\n  Files: ${files.length} (${res.areas.size} areas, ${res.routes.size} routes, lines.json with ${res.lines.length} tram/metro/train/ferry shapes ${kb(manifest.lines.bytes)} gzip, manifest)`);
+  log(`\n  Files: ${files.length} (${res.areas.size} areas, ${res.routes.size} routes, lines.json with ${res.lines.length} tram/metro/train/ferry shapes ${kb(manifest.lines.bytes)} gzip, ${liveLines.length} live trip indexes, manifest)`);
   log(`  Size: ${mb(raw)} raw, ${mb(gz)} gzip total · areas ${mb(areaGz.reduce((s, x) => s + x, 0))} gzip (median ${kb(q(0.5))}, 90% ≤ ${kb(q(0.9))}, max ${kb(areaGz[areaGz.length - 1]!)}) · routes ${mb(routeGz)} gzip`);
   log(`  Time ${((Date.now() - t0) / 1000).toFixed(0)} s · peak memory ${mb(Math.max(peakRss, process.resourceUsage().maxRSS * 1024))}`);
 }

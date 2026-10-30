@@ -45,7 +45,7 @@ function MiniStop() {
  * badge when alerts are on. Every symbol is drawn with the same classes as on the map.
  * "box": floating over the map (wide screens); "strip": a full-width band under the radar (phones).
  */
-export function Legend({ alerts = false, variant = 'box' }: { alerts?: boolean; variant?: 'box' | 'strip' }) {
+export function Legend({ alerts = false, live = false, variant = 'box' }: { alerts?: boolean; live?: boolean; variant?: 'box' | 'strip' }) {
   const symbols = (
     <>
       {MODES.map(({ key, label }) => (
@@ -82,6 +82,19 @@ export function Legend({ alerts = false, variant = 'box' }: { alerts?: boolean; 
           <b>Scheduled</b> ~3 min
         </span>
       </li>
+      {live && (
+        <li className="flex items-center gap-1">
+          <span className="legend-pin" aria-hidden>
+            <span className="vehicle-pin is-live" data-mode="bus">
+              <span className="src-dot src-live pin-src" />
+              <span className="pin-line" />
+            </span>
+          </span>
+          <span>
+            <b>Live</b> GPS
+          </span>
+        </li>
+      )}
     </>
   );
 
@@ -90,7 +103,7 @@ export function Legend({ alerts = false, variant = 'box' }: { alerts?: boolean; 
       <div className="legend-strip space-y-0.5 border-b border-border bg-surface px-3 py-1 text-[10px] leading-tight text-foreground/85" aria-label="Legend" role="group">
         <ul className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">{symbols}</ul>
         <ul className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-          <li className="font-bold text-foreground">Timetable data, not live:</li>
+          <li className="font-bold text-foreground">{live ? 'Timetable:' : 'Timetable data, not live:'}</li>
           {states}
         </ul>
       </div>
@@ -102,7 +115,7 @@ export function Legend({ alerts = false, variant = 'box' }: { alerts?: boolean; 
       aria-label="Legend"
       role="group"
     >
-      <p className="font-bold text-foreground">Timetable data, not live</p>
+      <p className="font-bold text-foreground">{live ? 'Timetable times · live GPS buses' : 'Timetable data, not live'}</p>
       <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5">{symbols}</ul>
       <ul className="space-y-0.5">{states}</ul>
     </div>

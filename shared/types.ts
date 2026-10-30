@@ -73,6 +73,11 @@ export interface Vehicle {
   lineColor: string | null;
   lineTextColor: string | null;
   tripId: string;
+  /**
+   * Line id of the vehicle's GTFS route (lineIdOfRoute, e.g. "[LA77N]1624"): names the timetable's trip_id index
+   * for this line (live/<line>.json). Null when the route id has no line id.
+   */
+  lineId: string | null;
   /** Destination; null when the operator's route data is not available. */
   headsign: string | null;
   /** Unix milliseconds of the GPS fix. */

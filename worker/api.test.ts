@@ -151,4 +151,27 @@ describe('live feature flag', () => {
       expect(await res.json()).toEqual({ error: 'live_disabled' });
     }
   });
+  it('serves only /api/vehicles with LIVE_VEHICLES_ENABLED (bus GPS over the timetable)', async () => {
+    const worker = (await import('./index')).default;
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+    const env = { LIVE_VEHICLES_ENABLED: 'true' };
+    for (const p of ['/api/board?lat=38.7&lng=-9.1', '/api/stops', '/api/vehicles/x/route']) {
+      const res = await worker.fetch(new Request('http://x' + p) as never, env, ctx);
+      expect(res.status).toBe(404);
+    }
+    const post = await worker.fetch(new Request('http://x/api/vehicles?lat=38.7&lng=-9.1', { method: 'POST' }) as never, env, ctx);
+    expect(post.status).toBe(405);
+  });
+});
+
+describe('live vehicles carry their line id (timetable trip index key)', () => {
+  it('derives it from the GTFS route id (approved rule lineIdOfRoute)', async () => {
+    const { lat, lng } = LISBON.testLocation;
+    const body = (await (await api(`/api/vehicles?lat=${lat}&lng=${lng}&radius=5000`).res).json()) as VehicleList;
+    expect(body.vehicles.length).toBeGreaterThan(0);
+    for (const v of body.vehicles) {
+      expect(v.lineId).toMatch(/^\[[A-Z0-9]+\]\w+$/);
+      expect(v.tripId.includes(v.lineId!.slice(v.lineId!.indexOf(']') + 1))).toBe(true);
+    }
+  });
 });

@@ -83,6 +83,11 @@ export async function handleAlerts(p: AlertsProvider, now: Date): Promise<Respon
 interface Env {
   /** Feature flag for the TML live API (docs/OFFLINE.md §7). Off ("false") in the offline timetable version. */
   LIVE_ENABLED?: string;
+  /**
+   * Feature flag for live bus positions only (GET /api/vehicles, docs/LIVE.md): Carris Metropolitana's open GPS
+   * feed shown over the timetable. The rest of the live API stays behind LIVE_ENABLED.
+   */
+  LIVE_VEHICLES_ENABLED?: string;
   /** Feature flag for service alerts (/api/alerts, docs/ALERTS.md). Independent of LIVE_ENABLED. */
   ALERTS_ENABLED?: string;
 }
@@ -96,7 +101,17 @@ export default {
       if (request.method !== 'GET') return error(405, 'method_not_allowed');
       return handleAlerts(alertsProvider, new Date());
     }
-    // The live provider is kept (and tested via handleApi) but switched off: no live API calls at runtime.
+    // Live bus positions have their own flag: one upstream list (cached 5 s) serves every phone.
+    if (url.pathname === '/api/vehicles' && env.LIVE_VEHICLES_ENABLED === 'true' && env.LIVE_ENABLED !== 'true') {
+      if (request.method !== 'GET') return error(405, 'method_not_allowed');
+      try {
+        return await handleApi(url, provider, new Date());
+      } catch (e) {
+        console.error('api error', url.pathname, e);
+        return error(502, 'upstream_unavailable');
+      }
+    }
+    // The rest of the live provider is kept (and tested via handleApi) but switched off.
     if (env.LIVE_ENABLED !== 'true') return error(404, 'live_disabled');
     // Feedback panel (ported from the original): no storage is configured in the MVP (no database),
     // so say so honestly instead of pretending it was sent.

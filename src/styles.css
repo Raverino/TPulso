@@ -498,6 +498,13 @@
   outline: 2px dashed oklch(0.97 0.008 250 / 0.9);
   outline-offset: 2px;
 }
+/* TPulso: a live GPS bus (docs/LIVE.md): solid edge instead of the dashed Expected one, green pulsing badge.
+   Stale (old fix): faded and grey (.is-stale above). */
+.vehicle-pin.is-live,
+.vehicle-pin.is-stale {
+  outline: 2px solid oklch(0.97 0.008 250 / 0.9);
+  outline-offset: 2px;
+}
 
 /* --- TPulso: station markers (one per physical station) ---------------------------------------
  * A ring split into one coloured segment per mode (--ring is a conic-gradient), sized by departures
@@ -1389,6 +1396,17 @@ button.is-pressed:not(:disabled):not(.compass-letter),
 }
 [data-appearance="azulejo"] .vehicle-pin .pin-src {
   background: #fff;
+}
+[data-appearance="azulejo"] .vehicle-pin.is-live,
+[data-appearance="azulejo"] .vehicle-pin.is-stale {
+  outline: 2px solid var(--cobalt);
+  outline-offset: 2px;
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-src.src-live {
+  background: var(--src-live);
+}
+[data-appearance="azulejo"] .vehicle-pin .pin-src.src-stale {
+  background: var(--src-stale);
 }
 
 /* Stations: diamond tiles. The frame carries the mode colour(s) (--ring), the middle is white glaze. */

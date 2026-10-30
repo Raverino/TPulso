@@ -1,7 +1,7 @@
 // Loads the offline timetable files (docs/OFFLINE.md): current.json -> manifest -> areas / routes.
 // Files are versioned, so they never change once published; the service worker (public/sw.js) keeps them
 // for offline use. In memory, each file is fetched once per page load.
-import type { AreaFile, LinesFile, Manifest, RouteFile } from '../../shared/timetable';
+import { liveTripFile, type AreaFile, type LinesFile, type LiveTripsFile, type Manifest, type RouteFile } from '../../shared/timetable';
 
 export class DataVersionGoneError extends Error {
   constructor() {
@@ -89,6 +89,24 @@ export function loadLines(m: Manifest): Promise<LinesFile> {
     p = getJson<LinesFile>(`/data/${m.version}/${m.lines.file}`);
     p.catch(() => linesCache.delete(m.version));
     linesCache.set(m.version, p);
+  }
+  return p;
+}
+
+const liveTripsCache = new Map<string, Promise<LiveTripsFile>>();
+
+/**
+ * One line's trip_id index (live GPS buses -> timetable trips), or null when this timetable has none for the line
+ * (nothing is fetched).
+ */
+export function loadLiveTrips(m: Manifest, lineId: string): Promise<LiveTripsFile> | null {
+  if (!m.liveTrips?.lines.includes(lineId)) return null;
+  const k = `${m.version}/${lineId}`;
+  let p = liveTripsCache.get(k);
+  if (!p) {
+    p = getJson<LiveTripsFile>(`/data/${m.version}/${m.liveTrips.dir}/${liveTripFile(lineId)}.json`);
+    p.catch(() => liveTripsCache.delete(k));
+    liveTripsCache.set(k, p);
   }
   return p;
 }

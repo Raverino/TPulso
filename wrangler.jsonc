@@ -7,6 +7,8 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
-  "vars": { "LIVE_ENABLED": "false", "ALERTS_ENABLED": "true" },
+  // LIVE_VEHICLES_ENABLED: Carris Metropolitana GPS bus positions over the timetable (docs/LIVE.md).
+  // LIVE_ENABLED: the rest of the old live API (stops, departures, board), still off.
+  "vars": { "LIVE_ENABLED": "false", "LIVE_VEHICLES_ENABLED": "true", "ALERTS_ENABLED": "true" },
   "observability": { "enabled": true }
 }

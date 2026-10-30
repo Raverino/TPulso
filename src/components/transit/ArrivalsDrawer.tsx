@@ -36,6 +36,7 @@ import { agoLabel, countdownLabel, SOURCE_TEXT, type SourceState } from "@/lib/s
 import type { OperatorInfo } from "../../../shared/timetable";
 import type { ServiceAlert } from "../../../shared/alerts";
 import { AlertNote, AlertsPanel, VehicleAlerts, type AlertsView } from "./AlertsPanel";
+import { LIVE_STALE_AFTER_S } from "@/offline/live";
 
 const ICONS: Record<TransportMode, typeof Bus> = {
   bus: Bus,
@@ -112,7 +113,8 @@ interface Props {
   onUnpin?: () => void;
   canSelect?: (vehicleId: string) => boolean;
   openId?: string | null;
-  radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number }[];
+  /** `fixAt`: time (ms) of the live GPS fix, for a live bus (docs/LIVE.md); absent = timetable position. */
+  radarVehicles?: { id: string; line: string; mode: Vehicle["mode"]; headsign: string; distanceM: number; fixAt?: number }[];
   onOpen?: (id: string | null) => void;
   panelView?: "results" | "help" | "stop" | "area" | "alerts";
   /** Expanded area point: its stations (letter order), the picked one, and a row tap (pick, then open). */
@@ -171,6 +173,8 @@ export interface HelpInfo {
   regionMB: number | null;
   download: { state: "idle" | "running" | "done" | "error"; done: number; total: number; error?: string };
   onDownload: () => void;
+  /** Live GPS buses are working now (docs/LIVE.md). */
+  liveBuses?: boolean;
 }
 
 export interface Followed {
@@ -186,6 +190,29 @@ export interface Followed {
  */
 const Countdown = memo(function Countdown({ atSec, state }: { atSec: number; state: SourceState }) {
   return <>{useClock((t) => countdownLabel(atSec, Math.floor(t / 1000), state), [atSec, state])}</>;
+});
+
+/**
+ * TPulso: where a vehicle's position comes from (docs/LIVE.md): the timetable (Expected), or a GPS fix of `fixAt`
+ * (ms): Live up to 2 min old, then Stale with its age. Reads the clock itself, like Countdown.
+ */
+const PositionSource = memo(function PositionSource({ fixAt }: { fixAt?: number | undefined }) {
+  const ageSec = useClock(() => (fixAt === undefined ? -1 : Math.max(0, Math.floor((Date.now() - fixAt) / 5000) * 5)), [fixAt]);
+  if (fixAt === undefined) {
+    return (
+      <>
+        <SourceDot state="expected" />
+        <span className="truncate">Expected position (timetable)</span>
+      </>
+    );
+  }
+  const stale = ageSec > LIVE_STALE_AFTER_S;
+  return (
+    <>
+      <SourceDot state={stale ? "stale" : "live"} />
+      <span className="truncate">{stale ? `Last seen ${agoLabel(ageSec)} ago (GPS)` : `Live GPS position · ${agoLabel(ageSec)} ago`}</span>
+    </>
+  );
 });
 
 export default function ArrivalsDrawer({
@@ -369,10 +396,9 @@ export default function ArrivalsDrawer({
                             <span className="font-display text-xs font-bold">{v.line}</span>{" "}
                             <span className="truncate text-xs text-foreground/80">{v.headsign || "destination not available"}</span>
                           </div>
-                          {/* TPulso: position source (timetable) */}
+                          {/* TPulso: position source (timetable, or live GPS) */}
                           <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                            <SourceDot state="expected" />
-                            <span className="truncate">Expected position (timetable)</span>
+                            <PositionSource fixAt={v.fixAt} />
                           </div>
                         </div>
                         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{v.distanceM} m</span>
@@ -666,8 +692,14 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
     <div className="flex h-full flex-col" onDoubleClick={onClose}>
       <PanelHeader title="How TPulso works" icon={CircleHelp} onClose={onClose} />
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 py-4 text-xs leading-relaxed [-webkit-overflow-scrolling:touch]">
-        <p className="font-display text-sm font-bold text-primary">Timetable data, not live</p>
-        <p className="text-foreground/85">TPulso shows the public transport timetable around you: stops inside your chosen circle, what leaves them in the next ten minutes, and where each vehicle should be according to the timetable. Nothing on screen is live.</p>
+        <p className="font-display text-sm font-bold text-primary">{info.liveBuses ? "Timetable times, live GPS buses" : "Timetable data, not live"}</p>
+        <p className="text-foreground/85">
+          TPulso shows the public transport timetable around you: stops inside your chosen circle, what leaves them in the next ten minutes, and
+          where each vehicle should be according to the timetable.{" "}
+          {info.liveBuses
+            ? "All times are from the timetable. Only the positions of Carris Metropolitana buses are live, from their GPS."
+            : "Nothing on screen is live."}
+        </p>
 
         <HelpSection title="Symbols">
           <HelpRow icon={<Bus className="size-4" />} title="Yellow" text="Bus" tone="bg-bus" />
@@ -683,6 +715,19 @@ function HelpPanel({ onClose, info }: { onClose: (() => void) | undefined; info:
         <HelpSection title="What the times and vehicles mean">
           <HelpRow icon={<SourceDot state="scheduled" />} title="Scheduled" text="A time from the timetable — “~3 min”" />
           <HelpRow icon={<SourceDot state="expected" />} title="Expected" text="Where a vehicle should be now according to the timetable (dashed outline). Real vehicles can be early, late or cancelled." />
+          <HelpRow icon={<SourceDot state="live" />} title="Live" text="A Carris Metropolitana bus where its GPS says it is now (solid outline, pulsing green dot)." />
+          <HelpRow icon={<SourceDot state="stale" />} title="Stale" text="Its last GPS position is more than 2 minutes old: shown faded, with “last seen … ago”. After 10 minutes it is no longer shown." />
+        </HelpSection>
+
+        <HelpSection title="Live GPS buses">
+          <p>
+            Carris Metropolitana publishes the GPS position of its buses as open data. TPulso links each bus to its own trip in the timetable
+            (by the official trip number), so tapping it shows its line, destination and next stops. Their times are still the timetable: a bus can be
+            seen running late while its times still show the plan. While the live data works, Carris Metropolitana buses without a GPS position are
+            not drawn; if it stops working, their timetable positions come back. Carris (city buses and trams), Metro, trains and ferries have no
+            open live data: they are always timetable positions.
+            {info.liveBuses ? "" : " Live buses are not available right now."}
+          </p>
         </HelpSection>
 
         <HelpSection title="Service alerts">
@@ -805,7 +850,7 @@ function VehicleDetails({
           </div>
           <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
             {(r?.operator || v.operator) ?? ""} · {MODE_LABEL[v.mode]} ·{" "}
-            <SourceDot state="expected" /> Expected position (timetable)
+            <PositionSource fixAt={v.live ? v.fixAt : undefined} />
           </div>
         </div>
       </div>
@@ -887,7 +932,8 @@ function TripCard({
             <span className="font-bold text-foreground">
               <Countdown atSec={nowSec + stop.etaS} state={stop.state} />
             </span>
-            · {clock((nowSec + stop.etaS) * 1000)}
+            {/* From an hour on, the countdown already is the clock time. */}
+            {stop.etaS < 3600 && <> · {clock((nowSec + stop.etaS) * 1000)}</>}
           </div>
         </>
       ) : (

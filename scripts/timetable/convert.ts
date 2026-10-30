@@ -36,6 +36,11 @@ export interface ConvertResult {
   /** Tram, metro, train and ferry line shapes for the whole region (identical shapes merged). */
   lines: LineShape[];
   feed: { version: string; publisher: string };
+  /**
+   * For operators with liveTrips: per line id, GTFS trip_id -> [pattern id, start (s of the service day)].
+   * An exact duplicate's trip_id points at the row it was merged into.
+   */
+  liveTrips: Map<string, Record<string, [number, number]>>;
   stats: { tripsInWindow: number; duplicateTrips: number; sameDayDuplicates: Record<string, number>; nearDuplicateTrips: number; nearDuplicatesByOp: Record<string, number>; stopTimes: number; patterns: number; stops: number; shapePointsRaw: number; shapePointsKept: number };
 }
 
@@ -279,10 +284,20 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
   // Exact duplicates (same route, destination, stops and times) are merged: the TML regional feed lists
   // TCB's trips twice, once per overlapping plan (docs/DATA.md). Days of both copies are combined.
   const seenTrips = new Map<string, TripRow>();
+  /** The pattern each kept row belongs to (an exact duplicate may have a different shape id than its twin). */
+  const rowPattern = new Map<TripRow, number>();
+  const liveTrips = new Map<string, Record<string, [number, number]>>();
+  const recordLive = (tripId: string, route: string, patternId: number, start: number) => {
+    const r = routes.get(route)!;
+    if (!r.op.liveTrips || !r.lineId) return;
+    let m = liveTrips.get(r.lineId);
+    if (!m) liveTrips.set(r.lineId, (m = {}));
+    m[tripId] = [patternId, start];
+  };
   let duplicateTrips = 0;
   /** Duplicates that ran on the same day as their twin (real double listings), per operator. */
   const sameDayDuplicates: Record<string, number> = {};
-  for (const t of trips.values()) {
+  for (const [tripId, t] of trips) {
     const n = t.st.length / 4;
     if (n < 2) continue;
     const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => t.st[a * 4]! - t.st[b * 4]!);
@@ -303,6 +318,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
       }
       twin[2] |= t.days;
       duplicateTrips++;
+      recordLive(tripId, t.route, rowPattern.get(twin)!, start);
       continue;
     }
     let pi = p.profiles.get(prof);
@@ -310,7 +326,10 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
     const row: TripRow = [start, pi, t.days];
     p.trips.push(row);
     seenTrips.set(dupKey, row);
+    rowPattern.set(row, p.id);
+    recordLive(tripId, t.route, p.id, start);
   }
+  rowPattern.clear();
   trips.clear();
   // Near duplicates: the same pattern listed twice with stop times up to 2 min apart (e.g. Carris 734 in the
   // evening): one bus, shown twice. The first listing keeps the shared days.
@@ -416,7 +435,7 @@ export async function convert(src: GtfsSource, opt: ConvertOptions): Promise<Con
   for (const o of operators) o.modes = [...(opModes.get(o.id) ?? [])].sort();
 
   return {
-    operators, excluded, areas, routes: routesOut, lines: [...lines.values()], feed,
+    operators, excluded, areas, routes: routesOut, lines: [...lines.values()], feed, liveTrips,
     stats: {
       tripsInWindow: [...patterns.values()].reduce((s, p) => s + p.trips.length, 0),
       duplicateTrips,

@@ -28,12 +28,14 @@ import {
 // TPulso: offline timetable data layer, region config and display rule.
 import { LISBON } from "../shared/region";
 import { withinRadius } from "../shared/geo";
-import { addDays, decodePolyline, type AreaFile, type LineShape, type RouteFile } from "../shared/timetable";
+import { addDays, decodePolyline, type AreaFile, type LineShape, type LiveTripsFile, type PatternData, type RouteFile } from "../shared/timetable";
 import { Legend } from "@/components/Legend";
 import { countdownLabel } from "@/lib/sourceStatus";
 import { useLocation, type TestReason } from "@/lib/useLocation";
 import { activeTrips, departuresAtStop, expectedVehicles, isExpired, positionsAt, routePath, tripStopsForRow, upcomingStops, type ActiveTrip, type ExpectedVehicle, type ScheduledDeparture } from "@/offline/engine";
-import { downloadRegion, loadLines, loadRoute, regionBytes } from "@/offline/store";
+import { downloadRegion, loadLines, loadLiveTrips, loadRoute, regionBytes } from "@/offline/store";
+import { linkTrip, liveOperators, liveState, liveVehicle, sliceFor } from "@/offline/live";
+import { useLiveBuses } from "@/lib/useLiveBuses";
 import { useTimetable } from "@/offline/useTimetable";
 import { clockNow, setSimClock, useClock } from "@/lib/clock";
 import { setAppearance, useAppearance } from "@/appearance";
@@ -58,6 +60,8 @@ const kindLabelOf = (members: readonly { dir?: { modes: readonly StopKind[] } | 
   stopKindLabel([...new Set(members.flatMap((m) => m.dir?.modes ?? ["bus" as const]))]);
 /** Active trips are rebuilt every 30 s of (simulated) time. */
 const TRIP_STEP_MS = 30_000;
+/** No operator replaced by the live feed (feed off, failing, or not in this timetable). */
+const NO_OPS: ReadonlySet<string> = new Set();
 
 // TPulso: Ferry added; modes without timetable data stay visible but disabled ("no data yet").
 const FILTERS: { key: FilterMode; label: string; icon: typeof Bus | null }[] = [
@@ -234,7 +238,62 @@ export default function App() {
     return activeTrips(manifest, areas, tripBucket - 60_000, tripBucket + TRIP_STEP_MS + 60_000);
   }, [manifest, expired, tt.areas, rideRoute, tripBucket]);
   // Expected vehicles for lists, counts and selection: every 5 s from the same index (the map animates on its own).
-  const expected = useMemo(() => positionsAt(trips, now), [trips, now]);
+  const scheduled = useMemo(() => positionsAt(trips, now), [trips, now]);
+
+  // TPulso: live GPS buses (docs/LIVE.md): Carris Metropolitana's open feed, each bus linked to its timetable trip by
+  // the exact GTFS trip_id (index files written by the timetable build). A linked bus keeps its trip key, so lists,
+  // selection, the stop panel and the departure rows work as before; only its position (and source) is real.
+  const liveOps = useMemo(() => (manifest ? liveOperators(manifest) : NO_OPS), [manifest]);
+  const liveFeed = useLiveBuses(hasCenter ? center : null, radius, liveOps.size > 0 && !expired);
+  const [liveIdx, setLiveIdx] = useState<ReadonlyMap<string, LiveTripsFile>>(new Map());
+  const liveLines = useMemo(() => [...new Set(liveFeed.buses.map((b) => b.lineId).filter((l): l is string => !!l))].sort().join("|"), [liveFeed.buses]);
+  useEffect(() => {
+    if (!manifest || !liveLines) return;
+    let stop = false;
+    for (const line of liveLines.split("|")) {
+      const k = `${manifest.version}/${line}`;
+      if (liveIdx.has(k)) continue;
+      loadLiveTrips(manifest, line)
+        ?.then((f) => !stop && setLiveIdx((m) => (m.has(k) ? m : new Map(m).set(k, f))))
+        .catch(() => {
+          /* no index: that bus is not linked, so not shown */
+        });
+    }
+    return () => {
+      stop = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifest, liveLines]);
+  const liveLinked = useMemo(() => {
+    const out = new Map<string, ExpectedVehicle>();
+    if (!manifest || !liveFeed.buses.length) return out;
+    const t = Date.now(); // live data is real time, even during a test ride's faster clock
+    const slices = new Map<number, PatternData[]>();
+    for (const a of tt.areas) for (const p of a.patterns) slices.set(p.id, [...(slices.get(p.id) ?? []), p]);
+    const sched = new Map(scheduled.map((v) => [v.key, v]));
+    for (const b of liveFeed.buses) {
+      const state = liveState(b.timestamp, t);
+      const entry = b.lineId ? liveIdx.get(`${manifest.version}/${b.lineId}`)?.trips[b.tripId] : undefined;
+      const ps = entry ? slices.get(entry[0]) : undefined;
+      if (!state || !entry || !ps) continue;
+      const slice = sliceFor(ps, b.lat, b.lng);
+      const link = slice ? linkTrip(manifest, slice, entry[1], t) : null;
+      if (!slice || !link) continue;
+      out.set(link.key, liveVehicle(b, slice, link, state, sched.get(link.key)));
+    }
+    return out;
+  }, [manifest, liveFeed.buses, liveIdx, tt.areas, scheduled]);
+  const liveList = useMemo(() => [...liveLinked.values()], [liveLinked]);
+  // While the feed answers (or failed less than a minute ago), its operators' timetable positions are not shown:
+  // a bus without a GPS fix is then not drawn at a guessed place. If the feed stops, Expected positions return.
+  const liveFresh = liveFeed.receivedAt !== null && Date.now() - liveFeed.receivedAt < 60_000;
+  const replacedOps = useMemo(() => (liveFresh ? liveOps : NO_OPS), [liveFresh, liveOps]);
+  const liveActive = liveFresh && liveOps.size > 0;
+  const expected = useMemo(() => {
+    if (!liveLinked.size && !replacedOps.size) return scheduled;
+    const kept = scheduled.filter((v) => !liveLinked.has(v.key) && (v.key === ride?.key || !replacedOps.has(v.op)));
+    return [...kept, ...liveList];
+  }, [scheduled, liveLinked, liveList, replacedOps, ride?.key]);
   const toVehicle = useCallback(
     (v: ExpectedVehicle): Vehicle => ({
       id: v.key,
@@ -249,7 +308,8 @@ export default function App() {
       punctualityMin: NaN,
       routeId: String(v.patternId),
       tripId: v.key,
-      live: false,
+      live: !!v.live,
+      ...(v.live ? { fixAt: v.live.fixAt } : {}),
     }),
     [opName],
   );
@@ -682,8 +742,11 @@ export default function App() {
     if (!manifest || expired) return [];
     const patterns = stopPatternIds.map((id) => routeFiles.get(id)).filter((r): r is RouteFile => !!r);
     const pseudo: AreaFile = { format: 1, version: manifest.version, area: "stop", stops: [], patterns };
-    return expectedVehicles(manifest, [pseudo], now).filter((v) => stopTripKeys.has(v.key)).map(toVehicle);
-  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle]);
+    // A trip with a live bus shows the bus; the live operator's other trips are not placed by the timetable.
+    const coming = expectedVehicles(manifest, [pseudo], now)
+      .filter((v) => stopTripKeys.has(v.key) && !liveLinked.has(v.key) && !replacedOps.has(v.op));
+    return [...coming, ...liveList.filter((v) => stopTripKeys.has(v.key))].map(toVehicle);
+  }, [stopTripKeys, radarVehicles, manifest, expired, stopPatternIds, routeFiles, now, toVehicle, liveLinked, liveList, replacedOps]);
   // The animation loop's trips: those of the loaded areas, plus (while a stop is open) the full routes coming to it.
   const mapTrips = useMemo(() => {
     if (!stopTripKeys || !manifest || expired) return trips;
@@ -896,9 +959,12 @@ export default function App() {
         .then(() => setDl((d) => ({ ...d, state: "done" })))
         .catch((e: Error) => setDl((d) => ({ ...d, state: "error", error: e.message })));
     },
+    liveBuses: liveActive,
   };
 
   const showOverlay = gps === "pending" || (gps === "denied" && !testAccepted);
+  // TPulso: the always-visible source note (CLAUDE.md): all times are timetable; with live buses, say which part is live.
+  const sourceNote = liveActive ? "Timetable times · live GPS buses" : "Timetable data, not live";
 
   // Phones: only the vehicle panel (its list of stops further along the line) can be raised over the map.
   const vehicleView = !!selected && panelView === "results";
@@ -968,7 +1034,7 @@ export default function App() {
             )}
             {/* TPulso offline: always say this is not live (on phones: at the start of the status row) */}
             <span className="hidden rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground md:inline">
-              Timetable data, not live
+              {sourceNote}
             </span>
           </h1>
           <p className="hidden truncate text-[10px] text-muted-foreground md:block">{statusLine}</p>
@@ -1005,7 +1071,7 @@ export default function App() {
           </button>
         </div>
         <p className="w-full truncate text-[10px] leading-tight text-muted-foreground md:hidden">
-          <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">Timetable data, not live</span>
+          <span className="mr-1 rounded border border-border px-1 text-[9px] font-bold uppercase tracking-wide">{sourceNote}</span>
           {place}
           {timetableProblem}
         </p>
@@ -1113,6 +1179,8 @@ export default function App() {
                 areaCloseRequest={areaCloseRequest}
                 baseLines={baseLines}
                 alertPatterns={alertPatterns}
+                liveVehicles={liveList}
+                liveOps={replacedOps}
                 onSelect={onMapSelect}
               />
             ) : (
@@ -1123,7 +1191,7 @@ export default function App() {
           </Suspense>
           {/* TPulso: legend of the timetable states + "Timetable data, not live" */}
           <div className="pointer-events-none absolute bottom-6 left-2 z-[470] hidden md:block">
-            <Legend alerts={!!alertsView?.current.length} />
+            <Legend alerts={!!alertsView?.current.length} live={liveActive} />
           </div>
           {expired && !showOverlay && (
             <div className="absolute inset-x-0 top-10 z-[490] mx-auto w-fit rounded-xl border border-destructive/50 bg-surface px-3 py-2 text-center text-xs shadow-float">
@@ -1179,7 +1247,7 @@ export default function App() {
         </div>
         {/* Phones: the legend sits under the radar, never over it. */}
         <div ref={legendRef} className={`map-slot-legend shrink-0 md:hidden ${vehiclePanelUp ? "is-covered" : ""}`}>
-          <Legend variant="strip" alerts={!!alertsView?.current.length} />
+          <Legend variant="strip" alerts={!!alertsView?.current.length} live={liveActive} />
         </div>
         <ArrivalsDrawer
           sheetUp={vehiclePanelUp}
@@ -1208,7 +1276,7 @@ export default function App() {
           canSelect={(id) => radarVehicles.some((v) => v.id === id)}
           openId={openId}
           radarVehicles={radarVehicles
-            .map((v) => ({ id: v.id, line: v.line, mode: v.mode, headsign: v.headsign, distanceM: Math.round(distanceMeters(v, center)) }))
+            .map((v) => ({ id: v.id, line: v.line, mode: v.mode, headsign: v.headsign, distanceM: Math.round(distanceMeters(v, center)), ...(v.fixAt !== undefined ? { fixAt: v.fixAt } : {}) }))
             .sort((a, b) => a.distanceM - b.distanceM)}
           onOpen={setOpenId}
           panelView={panelView}

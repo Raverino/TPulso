@@ -23,7 +23,7 @@ import { type SourceState } from "@/lib/sourceStatus";
 import { MAP_TILES, MODE_COLORS, mapTilesFor } from "@/config";
 import { useAppearance } from "@/appearance";
 import { clusterScreen, initialsOf, letterFor, letterOrder, shortLabel, spreadOffsets, uniqueInitials } from "@/offline/stations";
-import { patternBox, positionsAt, type ActiveTrip } from "@/offline/engine";
+import { patternBox, positionsAt, type ActiveTrip, type ExpectedVehicle } from "@/offline/engine";
 
 const MODE_GLYPH: Record<Vehicle["mode"], string> = {
   bus: "BUS",
@@ -166,10 +166,12 @@ function routeStopIcon(r: RouteStopMarker) {
 /** TPulso: the warning triangle of the alert badge (lucide "triangle-alert"). */
 const ALERT_SVG = `<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
 const iconCache = new Map<string, L.DivIcon>();
+/** Where a pin's position comes from: the timetable (Expected, dashed) or a GPS fix (Live / Stale, docs/LIVE.md). */
+type PinSource = "expected" | "live" | "stale";
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
-function vehicleIcon(v: Vehicle, alert = false) {
+function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected") {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}|${source}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
   // The pin is drawn 34 px and scaled to 90 % with CSS zoom (.vehicle-marker .vehicle-pin): 31 px box.
@@ -177,10 +179,11 @@ function vehicleIcon(v: Vehicle, alert = false) {
     className: "vehicle-marker",
     iconSize: [31, 31],
     iconAnchor: [15.5, 15.5],
-    // TPulso offline: every vehicle is an Expected position from the timetable (dashed outline + badge).
+    // TPulso: Expected = position from the timetable (dashed outline + badge); Live = GPS fix (solid edge, green
+    // pulsing badge); Stale = old GPS fix (faded, grey badge). Shape, motion and badge differ, not only colour.
     // TPulso: the pin colour comes only from the mode (src/config.ts MODE_COLORS).
-    html: `<div class="vehicle-pin is-expected" data-mode="${v.mode}">
-        <span class="src-dot src-expected pin-src"></span>
+    html: `<div class="vehicle-pin is-${source}" data-mode="${v.mode}">
+        <span class="src-dot src-${source} pin-src"></span>
         <span class="pin-glyph" style="font-size:8px;opacity:.7">${MODE_GLYPH[v.mode]}</span>
         <span class="pin-line">${esc(v.line)}</span>
         ${unknown ? `<span class="unknown-badge">?</span>` : ""}
@@ -544,6 +547,8 @@ function VehicleAnimator({
   onSelect,
   operatorName,
   alertPatterns,
+  live,
+  liveOps,
 }: {
   trips: readonly ActiveTrip[];
   clock: () => number;
@@ -556,15 +561,37 @@ function VehicleAnimator({
   operatorName: (op: string) => string;
   /** Patterns whose line has a service alert in force: their pins carry the alert badge. */
   alertPatterns: ReadonlySet<number>;
+  /** Live GPS buses linked to their timetable trips (same keys), drawn at their GPS position (docs/LIVE.md). */
+  live: readonly ExpectedVehicle[];
+  /** Operators whose buses come from the live feed while it works: their timetable positions are not drawn. */
+  liveOps: ReadonlySet<string>;
 }) {
   const map = useMap();
-  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns });
-  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns };
+  const state = useRef({ trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, liveOps });
+  state.current = { trips, clock, filter, radius, rideKey, headingUp, onSelect, operatorName, alertPatterns, live, liveOps };
 
   useEffect(() => {
     const markers = new Map<string, L.Marker>();
-    /** The alert badge each marker was drawn with (an alert appearing or ending swaps the icon in place). */
-    const badged = new Map<string, boolean>();
+    /** The alert badge and source each marker was drawn with (a change swaps the icon in place). */
+    const badged = new Map<string, string>();
+    /** Live pins glide from where they were drawn to each new GPS fix (LIVE_GLIDE_MS), instead of jumping. */
+    const glides = new Map<string, { fromLat: number; fromLng: number; toLat: number; toLng: number; t0: number }>();
+    const glide = (v: ExpectedVehicle, ts: number): ExpectedVehicle => {
+      let g = glides.get(v.key);
+      if (!g) {
+        glides.set(v.key, (g = { fromLat: v.lat, fromLng: v.lng, toLat: v.lat, toLng: v.lng, t0: ts }));
+      } else if (g.toLat !== v.lat || g.toLng !== v.lng) {
+        const s = Math.min(1, (ts - g.t0) / LIVE_GLIDE_MS);
+        g.fromLat += (g.toLat - g.fromLat) * s;
+        g.fromLng += (g.toLng - g.fromLng) * s;
+        g.toLat = v.lat;
+        g.toLng = v.lng;
+        g.t0 = ts;
+      }
+      const s = Math.min(1, (ts - g.t0) / LIVE_GLIDE_MS);
+      const e = s * s * (3 - 2 * s);
+      return { ...v, lat: g.fromLat + (g.toLat - g.fromLat) * e, lng: g.fromLng + (g.toLng - g.fromLng) * e };
+    };
     let raf = 0;
     let lastTs = -Infinity;
     let prevTs = performance.now();
@@ -573,7 +600,7 @@ function VehicleAnimator({
       const dt = Math.min(100, ts - prevTs);
       prevTs = ts;
       if (document.hidden) return;
-      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride, headingUp: hu } = state.current;
+      const { trips: list, clock: now, filter: f, radius: r, rideKey: ride, headingUp: hu, live: liveList, liveOps: lo } = state.current;
       // Vehicles move a few metres per second: 20 updates a second look the same as 60 and cost a third.
       // A ride's camera follows its vehicle every frame.
       if (!ride && ts - lastTs < 50) return;
@@ -584,24 +611,31 @@ function VehicleAnimator({
       const margin = r * 1.3; // radar + margin
       const dLat = margin / 111_320, dLng = margin / (111_320 * k);
       // Only trips whose shape comes near the radar (or the focused / ridden ones) are computed.
+      // A trip with a live GPS bus is drawn at the bus (below), not at its timetable position.
+      const liveKeys = new Set(liveList.map((v) => v.key));
       const near = list.filter((at) => {
         if (at.key === ride) return true;
+        if (liveKeys.has(at.key) || lo.has(at.p.op)) return false;
         if (f.keys) return f.keys.has(at.key);
         if (f.mode !== "all" && f.mode !== at.p.mode) return false;
         const b = patternBox(at.p);
         return b[0] <= centre.lat + dLat && b[2] >= centre.lat - dLat && b[1] <= centre.lng + dLng && b[3] >= centre.lng - dLng;
       });
-      let shownList = positionsAt(near, t).map((v) => ({ v, d: Math.hypot((v.lat - centre.lat) * 111_320, (v.lng - centre.lng) * 111_320 * k) }));
+      const liveShown = liveList
+        .filter((v) => v.key !== ride && (f.keys ? f.keys.has(v.key) : f.mode === "all" || f.mode === v.mode))
+        .map((v) => glide(v, ts));
+      for (const key of glides.keys()) if (!liveKeys.has(key)) glides.delete(key);
+      let shownList = [...positionsAt(near, t), ...liveShown].map((v) => ({ v, d: Math.hypot((v.lat - centre.lat) * 111_320, (v.lng - centre.lng) * 111_320 * k) }));
       if (!f.keys) shownList = shownList.filter((x) => x.d <= margin || x.v.key === ride);
       // Cap the DOM markers: the nearest ones (the ridden one always) when a busy area has too many.
       if (shownList.length > MAX_VEHICLE_MARKERS) shownList = shownList.sort((a, b) => (a.v.key === ride ? -1 : b.v.key === ride ? 1 : a.d - b.d)).slice(0, MAX_VEHICLE_MARKERS);
       // Pins that would cover each other (two buses at one stop, Metro trains at a platform pair) are pushed
-      // apart on screen until they barely touch (src/lib/declutter.ts). These are Expected positions from the
-      // timetable, so a few pixels of offset are harmless. Count unchanged; the ridden vehicle is never moved
-      // (the camera follows it). Recomputed every update from the true positions, so pins slide apart smoothly.
+      // apart on screen until they barely touch (src/lib/declutter.ts). Expected positions come from the
+      // timetable, so a few pixels of offset are harmless; live GPS pins and the ridden vehicle are never moved.
+      // Recomputed every update from the true positions, so pins slide apart smoothly.
       const pts = shownList.map(({ v }) => map.latLngToLayerPoint([v.lat, v.lng]));
       const spread = declutter(
-        pts.map((p, i) => ({ key: shownList[i]!.v.key, x: p.x, y: p.y, fixed: shownList[i]!.v.key === ride })),
+        pts.map((p, i) => ({ key: shownList[i]!.v.key, x: p.x, y: p.y, fixed: shownList[i]!.v.key === ride || !!shownList[i]!.v.live })),
         VEHICLE_MIN_GAP_PX,
       );
       const fanned = new Map<number, L.LatLng>();
@@ -627,22 +661,28 @@ function VehicleAnimator({
         seen.add(v.key);
         const m = markers.get(v.key);
         const alert = state.current.alertPatterns.has(v.patternId);
+        const source: PinSource = v.live?.state ?? "expected";
+        const look = `${alert ? 1 : 0}|${source}`;
         const veh = (): Vehicle => ({
           id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
           lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
         });
+        const title = `${v.line} → ${v.headsign || "—"} · ${source === "live" ? "Live GPS position" : source === "stale" ? "Last GPS position (old)" : "Expected position (timetable)"}`;
         if (m) {
           m.setLatLng(at);
-          if (badged.get(v.key) !== alert) {
-            m.setIcon(vehicleIcon(veh(), alert));
-            badged.set(v.key, alert);
+          if (badged.get(v.key) !== look) {
+            m.setIcon(vehicleIcon(veh(), alert, source));
+            m.getElement()?.setAttribute("title", title);
+            m.setZIndexOffset(v.key === ride ? 1500 : source === "expected" ? 600 : 700);
+            badged.set(v.key, look);
           }
         } else {
-          badged.set(v.key, alert);
+          badged.set(v.key, look);
           const marker = L.marker(at, {
-            icon: vehicleIcon(veh(), alert),
-            title: `${v.line} → ${v.headsign || "—"} · Expected position (timetable)`,
-            zIndexOffset: v.key === ride ? 1500 : 600,
+            icon: vehicleIcon(veh(), alert, source),
+            title,
+            // Live pins above timetable ones.
+            zIndexOffset: v.key === ride ? 1500 : source === "expected" ? 600 : 700,
           });
           marker.on("click", () => state.current.onSelect(v.key));
           marker.addTo(map);
@@ -667,6 +707,8 @@ function VehicleAnimator({
   return null;
 }
 
+/** A live pin glides to each new GPS fix over this long (ms), instead of jumping. */
+const LIVE_GLIDE_MS = 1500;
 /** Vehicle pins (31 px plus the dashed Expected outline) are kept at least this far apart, centre to centre. */
 const VEHICLE_MIN_GAP_PX = 34;
 /** At most this many vehicle markers in the DOM (the nearest to the radar centre). */
@@ -899,9 +941,15 @@ interface Props {
   baseLines: TransitRoute[];
   /** TPulso: patterns whose line has a service alert in force (vehicle pins get the alert badge). */
   alertPatterns?: ReadonlySet<number>;
+  /** TPulso: live GPS buses linked to their timetable trips (docs/LIVE.md). */
+  liveVehicles?: readonly ExpectedVehicle[];
+  /** TPulso: operators whose timetable positions are replaced by the live feed while it works. */
+  liveOps?: ReadonlySet<string>;
 }
 
 const NO_PATTERNS: ReadonlySet<number> = new Set();
+const NO_LIVE: readonly ExpectedVehicle[] = [];
+const NO_OPS: ReadonlySet<string> = new Set();
 
 function ClearOnMapClick({ onClear }: { onClear: () => void }) {
   const map = useMap();
@@ -1327,6 +1375,8 @@ export default memo(function TransitMap({
   areaCloseRequest,
   baseLines,
   alertPatterns,
+  liveVehicles,
+  liveOps,
 }: Props) {
   const discRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1502,6 +1552,8 @@ export default memo(function TransitMap({
         onSelect={onSelect}
         operatorName={operatorName}
         alertPatterns={alertPatterns ?? NO_PATTERNS}
+        live={liveVehicles ?? NO_LIVE}
+        liveOps={liveOps ?? NO_OPS}
       />
       <SonarGeometry radius={radius} disc={discRef} root={rootRef} />
     </MapContainer>

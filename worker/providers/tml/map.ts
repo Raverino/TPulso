@@ -1,6 +1,7 @@
 // Pure functions turning raw TML responses into TPulso data. No network here, so they are
 // tested directly against fixtures/.
 
+import { lineIdOfRoute } from '../../../shared/alerts';
 import { distanceMeters } from '../../../shared/geo';
 import type { BoardDeparture, Departure, LatLng, StopLite, Vehicle, VehicleRoute, VehicleStopTime } from '../../../shared/types';
 import { stripNamespace } from './ids';
@@ -74,6 +75,7 @@ export function toVehicle(v: RawVehicle, lines: LinesById, headsign: string | nu
     lineColor: line?.color ?? null,
     lineTextColor: line?.text_color ?? null,
     tripId: v.trip_id,
+    lineId: lineIdOfRoute(v.route_id),
     headsign,
     timestamp: v.timestamp,
   };
