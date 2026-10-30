@@ -5,7 +5,7 @@ import "@/lib/leafletGlobal";
 import "leaflet-rotate";
 import "@/lib/leafletRotateSetup";
 import { GLIDE_MIN_V, glideStep, normDeg, pointerAngle, releaseVelocity, settleBearing, type BearingSample } from "@/lib/rotation";
-import { declutter } from "@/lib/declutter";
+import { StableDeclutter } from "@/lib/declutter";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { LocateFixed } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -597,6 +597,7 @@ function VehicleAnimator({
      * straight to its fix instead (LIVE_GLIDE_MS).
      */
     const tracks = new Map<string, Track>();
+    const spreader = new StableDeclutter();
     const onLine = (v: ExpectedVehicle, ts: number): ExpectedVehicle | null => {
       const lv = v.live;
       if (!lv || lv.along === null) return null;
@@ -674,7 +675,9 @@ function VehicleAnimator({
       // pins come back at 100/200 m, and whenever only a few are shown (a selected vehicle, an open stop, a ride).
       const compact = r >= COMPACT_FROM_M && !f.keys;
       const pts = shownList.map(({ v }) => map.latLngToLayerPoint([v.lat, v.lng]));
-      const spread = declutter(
+      // Each close pair keeps the direction it was first split in, so passing vehicles slide by side by side
+      // instead of orbiting each other (src/lib/declutter.ts StableDeclutter).
+      const spread = spreader.run(
         pts.map((p, i) => ({ key: shownList[i]!.v.key, x: p.x, y: p.y, fixed: shownList[i]!.v.key === ride || !!shownList[i]!.v.live })),
         compact ? VEHICLE_DOT_GAP_PX : VEHICLE_MIN_GAP_PX,
       );
