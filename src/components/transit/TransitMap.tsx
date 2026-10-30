@@ -174,11 +174,23 @@ const iconCache = new Map<string, L.DivIcon>();
 /** Where a pin's position comes from: the timetable (Expected, dashed) or a GPS fix (Live / Stale, docs/LIVE.md). */
 type PinSource = "expected" | "live" | "stale";
 /** Cached so markers keep their DOM element (lets the CSS glide run between ticks). */
-function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected", glyph = MODE_GLYPH[v.mode]) {
+function vehicleIcon(v: Vehicle, alert = false, source: PinSource = "expected", glyph = MODE_GLYPH[v.mode], compact = false) {
   const unknown = isUnknownRoute(v);
-  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}|${source}|${glyph}`;
+  const key = `${v.mode}|${v.line}|${unknown ? 1 : 0}|${alert ? 1 : 0}|${source}|${glyph}|${compact ? 1 : 0}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
+  if (compact) {
+    // TPulso, wide radii (500/1000 m): a small dot in the mode colour, same source look as the full pin (dashed =
+    // timetable, solid + green badge = live GPS, faded = stale). Tapping it opens the vehicle (then drawn full).
+    const dot = L.divIcon({
+      className: "vehicle-marker",
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+      html: `<div class="vehicle-dot is-${source}" data-mode="${v.mode}">${source === "expected" ? "" : `<span class="src-dot src-${source} dot-src"></span>`}</div>`,
+    });
+    iconCache.set(key, dot);
+    return dot;
+  }
   // The pin is drawn 34 px and scaled to 90 % with CSS zoom (.vehicle-marker .vehicle-pin): 31 px box.
   const icon = L.divIcon({
     className: "vehicle-marker",
@@ -658,10 +670,13 @@ function VehicleAnimator({
       // apart on screen until they barely touch (src/lib/declutter.ts). Expected positions come from the
       // timetable, so a few pixels of offset are harmless; live GPS pins and the ridden vehicle are never moved.
       // Recomputed every update from the true positions, so pins slide apart smoothly.
+      // TPulso, owner choice: at wide radii (500/1000 m) vehicles are small dots, so 50+ of them stay readable. Full
+      // pins come back at 100/200 m, and whenever only a few are shown (a selected vehicle, an open stop, a ride).
+      const compact = r >= COMPACT_FROM_M && !f.keys;
       const pts = shownList.map(({ v }) => map.latLngToLayerPoint([v.lat, v.lng]));
       const spread = declutter(
         pts.map((p, i) => ({ key: shownList[i]!.v.key, x: p.x, y: p.y, fixed: shownList[i]!.v.key === ride || !!shownList[i]!.v.live })),
-        VEHICLE_MIN_GAP_PX,
+        compact ? VEHICLE_DOT_GAP_PX : VEHICLE_MIN_GAP_PX,
       );
       const fanned = new Map<number, L.LatLng>();
       spread.forEach((q, i) => {
@@ -687,7 +702,8 @@ function VehicleAnimator({
         const m = markers.get(v.key);
         const alert = state.current.alertPatterns.has(v.patternId);
         const source: PinSource = v.live?.state ?? "expected";
-        const look = `${alert ? 1 : 0}|${source}`;
+        const dot = compact && v.key !== ride;
+        const look = `${alert ? 1 : 0}|${source}|${dot ? 1 : 0}`;
         const veh = (): Vehicle => ({
           id: v.key, mode: v.mode, line: v.line, operator: state.current.operatorName(v.op), headsign: v.headsign,
           lat: v.lat, lng: v.lng, bearing: v.bearing, speedKmh: NaN, punctualityMin: NaN, routeId: String(v.patternId), tripId: v.key,
@@ -696,7 +712,7 @@ function VehicleAnimator({
         if (m) {
           m.setLatLng(at);
           if (badged.get(v.key) !== look) {
-            m.setIcon(vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op)));
+            m.setIcon(vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op), dot));
             m.getElement()?.setAttribute("title", title);
             m.setZIndexOffset(v.key === ride ? 1500 : source === "expected" ? 600 : 700);
             badged.set(v.key, look);
@@ -704,7 +720,7 @@ function VehicleAnimator({
         } else {
           badged.set(v.key, look);
           const marker = L.marker(at, {
-            icon: vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op)),
+            icon: vehicleIcon(veh(), alert, source, glyphOf(v.mode, v.op), dot),
             title,
             // Live pins above timetable ones.
             zIndexOffset: v.key === ride ? 1500 : source === "expected" ? 600 : 700,
@@ -736,6 +752,10 @@ function VehicleAnimator({
 const LIVE_GLIDE_MS = 1500;
 /** Vehicle pins (31 px plus the dashed Expected outline) are kept at least this far apart, centre to centre. */
 const VEHICLE_MIN_GAP_PX = 34;
+/** From this radius (m) vehicles are drawn as small dots (owner choice, "option A"). */
+const COMPACT_FROM_M = 500;
+/** Dots (14 px plus outline) are kept at least this far apart. */
+const VEHICLE_DOT_GAP_PX = 18;
 /** At most this many vehicle markers in the DOM (the nearest to the radar centre). */
 const MAX_VEHICLE_MARKERS = 60;
 

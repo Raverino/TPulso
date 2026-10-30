@@ -1560,6 +1560,66 @@ button.is-pressed:not(:disabled):not(.compass-letter),
   border-left: 2px solid var(--alert-line);
 }
 /* On a vehicle pin: top right, like the original's "?" badge corner. */
+/* TPulso: vehicles as small dots at wide radii (500/1000 m). Mode colour fill; the source shows as on the full pin:
+   dashed outline = timetable (Expected), solid outline + green pulsing badge = live GPS, faded + grey badge = stale.
+   The tap area is a finger's width, larger than the dot. */
+.vehicle-dot {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin: 1px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.55);
+}
+.vehicle-dot::after {
+  content: "";
+  position: absolute;
+  inset: -9px;
+}
+.vehicle-dot[data-mode="bus"] {
+  background: var(--bus);
+}
+.vehicle-dot[data-mode="tram"] {
+  background: var(--tram);
+}
+.vehicle-dot[data-mode="train"] {
+  background: var(--train);
+}
+.vehicle-dot[data-mode="ferry"] {
+  background: var(--ferry);
+}
+.vehicle-dot.is-expected {
+  outline: 1.5px dashed oklch(0.97 0.008 250 / 0.9);
+  outline-offset: 1.5px;
+}
+.vehicle-dot.is-live,
+.vehicle-dot.is-stale {
+  outline: 1.5px solid oklch(0.97 0.008 250 / 0.9);
+  outline-offset: 1.5px;
+}
+.vehicle-dot.is-stale {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.vehicle-dot .dot-src {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 1.5px oklch(0.15 0.015 258);
+}
+[data-appearance="azulejo"] .vehicle-dot.is-expected {
+  outline-color: var(--cobalt);
+}
+[data-appearance="azulejo"] .vehicle-dot.is-live,
+[data-appearance="azulejo"] .vehicle-dot.is-stale {
+  outline-color: var(--cobalt);
+}
+[data-appearance="azulejo"] .vehicle-dot .dot-src {
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
 /* Map markers at 90 % (owner request); the pin keeps its 34 px design, the marker box is 31 px. */
 .vehicle-marker .vehicle-pin {
   zoom: 0.9;
